@@ -1,0 +1,215 @@
+<!DOCTYPE HTML>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>ho.ax - Send me your `lspci -vv`</title>
+    <link rel="stylesheet" type="text/css" href="/css/reset.css" media="screen">
+    <link rel="stylesheet" type="text/css" href="/css/grid.css" media="screen">
+    <link rel="stylesheet" type="text/css" href="/css/style.css" media="screen">
+    <link rel="stylesheet" type="text/css" href="/css/highlight.css" media="screen">
+    <link rel="alternate" type="application/rss+xml" title="RSS" href="http://ho.ax/feed.xml">
+  </head>
+  <body>
+      <div id="container">
+        <div id="header">
+          <div class="container_12">
+            <div class="grid_6">
+              <h1><a href="/">ho/ax.</a></h1>
+            </div>
+            <div class="grid_6">
+              <div class="media">
+                <div style="float: left"><a class="twitter" href="http://twitter.com/snare"></a></div>
+                <div style="float: left"><a class="rss" href="/feed.xml"></a></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div id="splitbar">&nbsp;</div>
+        <div id="main">
+          <div class="container_12">
+            <div class="grid_9">
+              <div id="content">
+                <h1><a href="/posts/2012/06/send-me-your-lspci/">Send me your `lspci -vv`</a></h1>
+<p class="metadata">
+	Posted by snare on 8 June 2012. Tags: <a class="tag" href="/tag/pci/" rel="tag">pci</a>, <a class="tag" href="/tag/efi/" rel="tag">efi</a>, <a class="tag" href="/tag/rootkits/" rel="tag">rootkits</a>
+</p>
+
+<p>Got an Mac? I need your help. I want to find out a bit more about the hardware that’s in various Intel Macs – specifically about built-in PCI devices with onboard expansion ROMs. You can help me out by sending me the output of <code>lspci -vv</code> on your Mac. The only catch is you need to install a kernel extension to do it. But don’t worry, it’s software written by the CoreBoot dudes! They’re trustworthy, I swear!</p>
+
+<p>EDIT2: I’ve had a couple of people having trouble building DirectHW. I’ve uploaded binaries <a href="/downloads/DirectHW.dmg">here</a> and <a href="/downloads/pciutils-3.1.7.dmg">here</a> if you don’t want to build/have trouble building from source (and trust me).</p>
+
+<p>The mission is dangerous, but if you’re ready, willing and able, this is what you need to do:</p>
+
+<pre><code>$ git clone http://review.coreboot.org/p/directhw.git
+Cloning into 'directhw'...
+
+remote: Counting objects: 59, done
+remote: Finding sources: 100% (59/59)
+remote: Total 59 (delta 16), reused 59 (delta 16)
+Unpacking objects: 100% (59/59), done.
+
+$ cd directhw/macosx
+$ make pciutils
+&lt;snip&gt;
+created: /path/to/directhw/macosx/pciutils-3.1.7.dmg
+Disk image done
+
+$ make directhw
+&lt;snip&gt;
+created: /path/to/directhw/macosx/DirectHW/DirectHW.dmg
+Disk image done
+</code></pre>
+
+<p>You’ll now have those two disk images created at the paths displayed at the end of the make processes. Install the packages in each of the DMGs, and then load the kernel extension:</p>
+
+<pre><code>$ sudo kextload /System/Library/Extensions/DirectHW.kext
+</code></pre>
+
+<p>EDIT: Oh I forgot, please turn off the energy saver setting (on laptops) to automatically switch graphics or whatever, so the non-integrated graphics card is powered on. You might need to log out and back in before it is powered on.</p>
+
+<p>And get me the sweet, sweet <code>lspci</code> goodies:</p>
+
+<pre><code>$ sudo lspci -vv
+00:00.0 Host bridge: Intel Corporation Device 0104 (rev 09)
+	Subsystem: Apple Computer Inc. Device 00dc
+	Control: I/O- Mem+ BusMaster+ SpecCycle- MemWINV- VGASnoop- ParErr- Stepping- SERR- FastB2B- DisINTx-
+	Status: Cap+ 66MHz- UDF- FastB2B+ ParErr- DEVSEL=fast &gt;TAbort- &lt;TAbort- &lt;MAbort+ &gt;SERR- &lt;PERR- INTx-
+	Latency: 0
+	Capabilities: [e0] Vendor Specific Information: Len=0c &lt;?&gt;
+&lt;snip&gt;
+</code></pre>
+
+<p>Including the model and hardware specs of the machine would be great too:</p>
+
+<pre><code>$ system_profiler SPHardwareDataType|grep -v UUID|grep -v Serial
+Hardware:
+
+Hardware Overview:
+
+  Model Name: iMac
+&lt;snip&gt;
+</code></pre>
+
+<p>Email me the results at snare [at] this domain, or pastebin/gist it and tweet it at me. I appreciate all the help I can get, thanks very much!</p>
+
+<p>If you don’t want this stuff to hang around on your machine you can <code>rm</code> the following stuff (gleaned from the <em>Archive.bom</em>s):</p>
+
+<pre><code>PCIUtils:
+/usr/include/pci
+/usr/include/pci/config.h
+/usr/include/pci/header.h
+/usr/include/pci/pci.h
+/usr/include/pci/types.h
+/usr/lib/libpci.a
+/usr/lib/pkgconfig
+/usr/lib/pkgconfig/libpci.pc
+/usr/sbin/lspci
+/usr/sbin/setpci
+/usr/sbin/update-pciids
+/usr/share/man/man7/pcilib.7
+/usr/share/man/man8/lspci.8
+/usr/share/man/man8/setpci.8
+/usr/share/man/man8/update-pciids.8
+/usr/share/pci.ids.gz
+
+DirectHW:
+/System/Library/Extensions/DirectHW.kext
+/System/Library/Frameworks/DirectHW.framework
+</code></pre>
+
+
+              </div>
+            </div>
+            <div class="grid_3">
+              <div id="sidebar">
+                <h2>PAGES</h2>
+                <ul>
+                  <li><a href="/">Home</a></li>
+                  <li><a href="/about">About</a></li>
+                  <li><a href="/downloads">Downloads</a></li>
+                </ul>
+                <h2>TAGS</h2>
+                <p><a class="tagcloud" style="font-size:78.23529411764706%;" href="/tag/voltron/" rel="tag">voltron</a> <a class="tagcloud" style="font-size:85.29411764705883%;" href="/tag/debugging/" rel="tag">debugging</a> <a class="tagcloud" style="font-size:85.29411764705883%;" href="/tag/gdb/" rel="tag">gdb</a> <a class="tagcloud" style="font-size:64.11764705882352%;" href="/tag/lldb/" rel="tag">lldb</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/calculon/" rel="tag">calculon</a> <a class="tagcloud" style="font-size:120.58823529411765%;" href="/tag/efi/" rel="tag">efi</a> <a class="tagcloud" style="font-size:71.17647058823529%;" href="/tag/ida pro/" rel="tag">ida pro</a> <a class="tagcloud" style="font-size:64.11764705882352%;" href="/tag/idapython/" rel="tag">idapython</a> <a class="tagcloud" style="font-size:64.11764705882352%;" href="/tag/reversing/" rel="tag">reversing</a> <a class="tagcloud" style="font-size:85.29411764705883%;" href="/tag/rootkits/" rel="tag">rootkits</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/refind/" rel="tag">refind</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/black hat/" rel="tag">black hat</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/firmware/" rel="tag">firmware</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/bus pirate/" rel="tag">bus pirate</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/flashrom/" rel="tag">flashrom</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/pci/" rel="tag">pci</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/syscan/" rel="tag">syscan</a> <a class="tagcloud" style="font-size:78.23529411764706%;" href="/tag/mac os x/" rel="tag">mac os x</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/x86-64/" rel="tag">x86-64</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/clang/" rel="tag">clang</a> <a class="tagcloud" style="font-size:71.17647058823529%;" href="/tag/kernel/" rel="tag">kernel</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/kexts/" rel="tag">kexts</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/mach-o/" rel="tag">mach-o</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/python/" rel="tag">python</a> <a class="tagcloud" style="font-size:64.11764705882352%;" href="/tag/vmware/" rel="tag">vmware</a> </p>
+                <h2>POSTS</h2>
+                <ul>
+                  
+                    <li><a href="/posts/2015/05/building-voltron-command-plugins/">Building Voltron Command Plugins</a></li>
+                  
+                    <li><a href="/posts/2014/12/building-voltron-views/">Building Voltron Views</a></li>
+                  
+                    <li><a href="/posts/2013/10/calculon-a-calculator-for-nerds/">Calculon - a calculator for nerds</a></li>
+                  
+                    <li><a href="/posts/2013/06/voltron-a-hacky-ui-for-gdb/">Voltron - a hacky UI for GDB</a></li>
+                  
+                    <li><a href="/posts/2012/12/te-loader-for-ida-pro/">TE loader for IDA Pro</a></li>
+                  
+                    <li><a href="/posts/2012/10/ruxcon/">Ruxcon 2012</a></li>
+                  
+                    <li><a href="/posts/2012/09/ida-pro-scripts-for-efi-reversing/">IDA Pro scripts for EFI reversing</a></li>
+                  
+                    <li><a href="/posts/2012/08/building-refind-with-edk2-on-osx/">Building rEFInd with EDKII on Mac OS X</a></li>
+                  
+                    <li><a href="/posts/2012/07/black-hat-usa-2012/">Black Hat USA 2012</a></li>
+                  
+                    <li><a href="/posts/2012/06/unbricking-a-macbook/">Un-bricking a MacBook</a></li>
+                  
+                    <li><a href="/posts/2012/06/send-me-your-lspci/">Send me your `lspci -vv`</a></li>
+                  
+                    <li><a href="/posts/2012/05/syscan-2012-is-over/">SyScan 2012 is Over</a></li>
+                  
+                    <li><a href="/posts/2012/03/rip-relative-addressing-and-kernel-payloads/">RIP-Relative Addressing and Kernel Payloads</a></li>
+                  
+                    <li><a href="/posts/2012/02/resolving-kernel-symbols/">Resolving kernel symbols</a></li>
+                  
+                    <li><a href="/posts/2012/02/carving-up-efi-fat-binaries/">Carving up EFI fat binaries</a></li>
+                  
+                    <li><a href="/posts/2012/02/vmware-hardware-debugging/">VMware debugging II&#58; "Hardware" debugging</a></li>
+                  
+                    <li><a href="/posts/2012/02/debugging-the-mac-os-x-kernel-with-vmware-and-gdb/">Debugging the Mac OS X kernel with VMware and GDB</a></li>
+                  
+                </ul>
+                <h2>SEARCH</h2>
+                <form method="get" action="http://www.google.com/search">
+                  <fieldset>
+                    <input type="hidden" name="sitesearch" value="ho.ax"/>
+                    <input type="text" class="searchbox" name="q" size="31" maxlength="255" value=""/>
+                    <input type="image" class="searchbutton" width=24 height=24 src="/img/search.png" value="Search"/>
+                  </fieldset>
+                </form>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="splitbar">&nbsp;</div>
+      <div id="footer">
+          <div class="container_12">
+            <div class="grid_9">
+              <p>Last updated on 9 May 2015 by snare. Please don't steal my stuff.</p>
+            </div>
+            <div class="grid_3">
+              <div class="media">
+                <div style="float: left"><a class="twitter" href="http://twitter.com/snare"></a></div>
+                <div style="float: left"><a class="rss" href="/feed.xml"></a></div>
+              </div>
+            </div>
+        </div>
+      </div>
+    </div>
+  <script type="text/javascript">
+
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-29183428-1']);
+  _gaq.push(['_trackPageview']);
+
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+
+  </script>
+  <img src="/img/twitter_active.png" style="display: none" />
+  <img src="/img/rss_active.png" style="display: none" />
+  </body>
+</html>

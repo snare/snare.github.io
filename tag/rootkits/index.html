@@ -1,0 +1,584 @@
+<!DOCTYPE HTML>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>ho.ax - </title>
+    <link rel="stylesheet" type="text/css" href="/css/reset.css" media="screen">
+    <link rel="stylesheet" type="text/css" href="/css/grid.css" media="screen">
+    <link rel="stylesheet" type="text/css" href="/css/style.css" media="screen">
+    <link rel="stylesheet" type="text/css" href="/css/highlight.css" media="screen">
+    <link rel="alternate" type="application/rss+xml" title="RSS" href="http://ho.ax/feed.xml">
+  </head>
+  <body>
+      <div id="container">
+        <div id="header">
+          <div class="container_12">
+            <div class="grid_6">
+              <h1><a href="/">ho/ax.</a></h1>
+            </div>
+            <div class="grid_6">
+              <div class="media">
+                <div style="float: left"><a class="twitter" href="http://twitter.com/snare"></a></div>
+                <div style="float: left"><a class="rss" href="/feed.xml"></a></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div id="splitbar">&nbsp;</div>
+        <div id="main">
+          <div class="container_12">
+            <div class="grid_9">
+              <div id="content">
+                
+  <h1><a href="/posts/2012/10/ruxcon/">Ruxcon 2012</a></h1>
+<p class="metadata">
+	Posted by snare on 23 October 2012. Tags: <a class="tag" href="/tag/efi/" rel="tag">efi</a>, <a class="tag" href="/tag/rootkits/" rel="tag">rootkits</a>
+</p>
+
+<p>I presented my research into EFI rootkits at Ruxcon 2012 in Melbourne, Australia on Saturday. You can find the slides right <a href="/downloads/De_Mysteriis_Dom_Jobsivs_Ruxcon.pdf">here</a>.</p>
+
+  
+	<hr/>
+  
+
+  <h1><a href="/posts/2012/07/black-hat-usa-2012/">Black Hat USA 2012</a></h1>
+<p class="metadata">
+	Posted by snare on 19 July 2012. Tags: <a class="tag" href="/tag/efi/" rel="tag">efi</a>, <a class="tag" href="/tag/rootkits/" rel="tag">rootkits</a>, <a class="tag" href="/tag/black hat/" rel="tag">black hat</a>
+</p>
+
+<p>Hello internet dudes. I am privileged to be presenting my EFI rootkit research at <a href="http://blackhat.com/html/bh-us-12/">Black Hat USA</a> this year in scorching Las Vegas. If you’re going to be at the conference come along and check out my talk on <a href="https://www.blackhat.com/html/bh-us-12/bh-us-12-briefings.html#K">Thursday July 26</a>, and/or hit me up on <a href="http://twitter.com/snare">twitter</a>. I’ll be in town for <a href="http://defcon.org">DEF CON</a> as well, of course.</p>
+
+<p>I’ll be talking about some of the same stuff that I talked about at SyScan - how EFI can be used in a Mac OS X rootkit, how the kernel payload can work, etc - but I’ll also be talking about and demonstrating a pretty sweet new attack, so stay tuned. I’ll upload the slides for the presentation and the white paper as soon as I’ve finished presenting and have had 2 beers.</p>
+
+<p><strong>Update</strong>: I tweeted the links to the materials shortly after my talk, but here they are: <a href="/downloads/De_Mysteriis_Dom_Jobsivs_Black_Hat_Slides.pdf">Slides</a> / <a href="/downloads/De_Mysteriis_Dom_Jobsivs_Black_Hat_Paper.pdf">Paper</a>.</p>
+
+  
+	<hr/>
+  
+
+  <h1><a href="/posts/2012/06/send-me-your-lspci/">Send me your `lspci -vv`</a></h1>
+<p class="metadata">
+	Posted by snare on 8 June 2012. Tags: <a class="tag" href="/tag/pci/" rel="tag">pci</a>, <a class="tag" href="/tag/efi/" rel="tag">efi</a>, <a class="tag" href="/tag/rootkits/" rel="tag">rootkits</a>
+</p>
+
+<p>Got an Mac? I need your help. I want to find out a bit more about the hardware that’s in various Intel Macs – specifically about built-in PCI devices with onboard expansion ROMs. You can help me out by sending me the output of <code>lspci -vv</code> on your Mac. The only catch is you need to install a kernel extension to do it. But don’t worry, it’s software written by the CoreBoot dudes! They’re trustworthy, I swear!</p>
+
+<p>EDIT2: I’ve had a couple of people having trouble building DirectHW. I’ve uploaded binaries <a href="/downloads/DirectHW.dmg">here</a> and <a href="/downloads/pciutils-3.1.7.dmg">here</a> if you don’t want to build/have trouble building from source (and trust me).</p>
+
+<p>The mission is dangerous, but if you’re ready, willing and able, this is what you need to do:</p>
+
+<pre><code>$ git clone http://review.coreboot.org/p/directhw.git
+Cloning into 'directhw'...
+
+remote: Counting objects: 59, done
+remote: Finding sources: 100% (59/59)
+remote: Total 59 (delta 16), reused 59 (delta 16)
+Unpacking objects: 100% (59/59), done.
+
+$ cd directhw/macosx
+$ make pciutils
+&lt;snip&gt;
+created: /path/to/directhw/macosx/pciutils-3.1.7.dmg
+Disk image done
+
+$ make directhw
+&lt;snip&gt;
+created: /path/to/directhw/macosx/DirectHW/DirectHW.dmg
+Disk image done
+</code></pre>
+
+<p>You’ll now have those two disk images created at the paths displayed at the end of the make processes. Install the packages in each of the DMGs, and then load the kernel extension:</p>
+
+<pre><code>$ sudo kextload /System/Library/Extensions/DirectHW.kext
+</code></pre>
+
+<p>EDIT: Oh I forgot, please turn off the energy saver setting (on laptops) to automatically switch graphics or whatever, so the non-integrated graphics card is powered on. You might need to log out and back in before it is powered on.</p>
+
+<p>And get me the sweet, sweet <code>lspci</code> goodies:</p>
+
+<pre><code>$ sudo lspci -vv
+00:00.0 Host bridge: Intel Corporation Device 0104 (rev 09)
+	Subsystem: Apple Computer Inc. Device 00dc
+	Control: I/O- Mem+ BusMaster+ SpecCycle- MemWINV- VGASnoop- ParErr- Stepping- SERR- FastB2B- DisINTx-
+	Status: Cap+ 66MHz- UDF- FastB2B+ ParErr- DEVSEL=fast &gt;TAbort- &lt;TAbort- &lt;MAbort+ &gt;SERR- &lt;PERR- INTx-
+	Latency: 0
+	Capabilities: [e0] Vendor Specific Information: Len=0c &lt;?&gt;
+&lt;snip&gt;
+</code></pre>
+
+<p>Including the model and hardware specs of the machine would be great too:</p>
+
+<pre><code>$ system_profiler SPHardwareDataType|grep -v UUID|grep -v Serial
+Hardware:
+
+Hardware Overview:
+
+  Model Name: iMac
+&lt;snip&gt;
+</code></pre>
+
+<p>Email me the results at snare [at] this domain, or pastebin/gist it and tweet it at me. I appreciate all the help I can get, thanks very much!</p>
+
+<p>If you don’t want this stuff to hang around on your machine you can <code>rm</code> the following stuff (gleaned from the <em>Archive.bom</em>s):</p>
+
+<pre><code>PCIUtils:
+/usr/include/pci
+/usr/include/pci/config.h
+/usr/include/pci/header.h
+/usr/include/pci/pci.h
+/usr/include/pci/types.h
+/usr/lib/libpci.a
+/usr/lib/pkgconfig
+/usr/lib/pkgconfig/libpci.pc
+/usr/sbin/lspci
+/usr/sbin/setpci
+/usr/sbin/update-pciids
+/usr/share/man/man7/pcilib.7
+/usr/share/man/man8/lspci.8
+/usr/share/man/man8/setpci.8
+/usr/share/man/man8/update-pciids.8
+/usr/share/pci.ids.gz
+
+DirectHW:
+/System/Library/Extensions/DirectHW.kext
+/System/Library/Frameworks/DirectHW.framework
+</code></pre>
+
+
+  
+	<hr/>
+  
+
+  <h1><a href="/posts/2012/05/syscan-2012-is-over/">SyScan 2012 is Over</a></h1>
+<p class="metadata">
+	Posted by snare on 1 May 2012. Tags: <a class="tag" href="/tag/syscan/" rel="tag">syscan</a>, <a class="tag" href="/tag/efi/" rel="tag">efi</a>, <a class="tag" href="/tag/rootkits/" rel="tag">rootkits</a>
+</p>
+
+<p>SyScan 2012 was a blast. I talked shit about EFI rootkits, which was pretty fun. My slides are uploaded <a href="/downloads/De_Mysteriis_Dom_Jobsivs_-_Syscan.pdf">here</a> if you’re interested.</p>
+
+<p>A couple of highlights for me were Brett Moore’s talk about process continuation (I’m kinda surprised IE didn’t crash spontaneously and ruin his demos), Alex Ionescu’s talk about ACPI 5.0 rootkits (Alex lost his laptop on the way over and had to rewrite his talk AND demos - still nailed it), and Stefan Esser’s talk about the iOS kernel heap (crossover with OS X kernel is very interesting to me). Oh and the chilli crab.</p>
+
+<p>I’ll definitely be making an effort to get over to Singapore for SyScan 2013. Thomas Lim knows how to put on a con/party.</p>
+
+  
+	<hr/>
+  
+
+  <h1><a href="/posts/2012/02/resolving-kernel-symbols/">Resolving kernel symbols</a></h1>
+<p class="metadata">
+	Posted by snare on 25 February 2012. Tags: <a class="tag" href="/tag/mac os x/" rel="tag">mac os x</a>, <a class="tag" href="/tag/kernel/" rel="tag">kernel</a>, <a class="tag" href="/tag/kexts/" rel="tag">kexts</a>, <a class="tag" href="/tag/rootkits/" rel="tag">rootkits</a>, <a class="tag" href="/tag/mach-o/" rel="tag">mach-o</a>
+</p>
+
+<p>KXLD doesn’t like us much. He has KPIs to meet and doesn’t have time to help out shifty rootkit developers. KPIs are Kernel Programming Interfaces - lists of symbols in the kernel that KXLD (the kernel extension linker) will allow kexts to be linked against. The KPIs on which your kext depends are specified in the <code>Info.plist</code> file like this:</p>
+
+<pre><code class="language-xml"><span class="nt">&lt;key&gt;</span>OSBundleLibraries<span class="nt">&lt;/key&gt;</span>
+<span class="nt">&lt;dict&gt;</span>
+	<span class="nt">&lt;key&gt;</span>com.apple.kpi.bsd<span class="nt">&lt;/key&gt;</span>
+	<span class="nt">&lt;string&gt;</span>11.0<span class="nt">&lt;/string&gt;</span>
+	<span class="nt">&lt;key&gt;</span>com.apple.kpi.libkern<span class="nt">&lt;/key&gt;</span>
+	<span class="nt">&lt;string&gt;</span>11.0<span class="nt">&lt;/string&gt;</span>
+	<span class="nt">&lt;key&gt;</span>com.apple.kpi.mach<span class="nt">&lt;/key&gt;</span>
+	<span class="nt">&lt;string&gt;</span>11.0<span class="nt">&lt;/string&gt;</span>
+	<span class="nt">&lt;key&gt;</span>com.apple.kpi.unsupported<span class="nt">&lt;/key&gt;</span>
+	<span class="nt">&lt;string&gt;</span>11.0<span class="nt">&lt;/string&gt;</span>
+	<span class="nt">&lt;key&gt;</span>com.apple.kpi.iokit<span class="nt">&lt;/key&gt;</span>
+	<span class="nt">&lt;string&gt;</span>11.0<span class="nt">&lt;/string&gt;</span>
+	<span class="nt">&lt;key&gt;</span>com.apple.kpi.dsep<span class="nt">&lt;/key&gt;</span>
+	<span class="nt">&lt;string&gt;</span>11.0<span class="nt">&lt;/string&gt;</span>
+<span class="nt">&lt;/dict&gt;</span></code></pre>
+
+<p>Those bundle identifiers correspond to the <code>CFBundleIdentifier</code> key specified in the <code>Info.plist</code> files for “plug-ins” to the <code>System.kext</code> kernel extension. Each KPI has its own plug-in kext - for example, the <code>com.apple.kpi.bsd</code> symbol table lives in <code>BSDKernel.kext</code>. These aren’t exactly complete kexts, they’re just Mach-O binaries with symbol tables full of undefined symbols (they really reside within the kernel image), which you can see if we dump the load commands:</p>
+
+<pre><code>$ otool -l /System/Library/Extensions/System.kext/PlugIns/BSDKernel.kext/BSDKernel 
+/System/Library/Extensions/System.kext/PlugIns/BSDKernel.kext/BSDKernel:
+Load command 0
+     cmd LC_SYMTAB
+ cmdsize 24
+  symoff 80
+   nsyms 830
+  stroff 13360
+ strsize 13324
+Load command 1
+     cmd LC_UUID
+ cmdsize 24
+    uuid B171D4B0-AC45-47FC-8098-5B2F89B474E6
+</code></pre>
+
+<p>That’s it - just the <code>LC_SYMTAB</code> (symbol table). So, how many symbols are there in the kernel image?</p>
+
+<pre><code>$ nm /mach_kernel|wc -l
+   16122
+</code></pre>
+
+<p>Surely all the symbols in all the KPI symbol tables add up to the same number, right?</p>
+
+<pre><code>$ find /System/Library/Extensions/System.kext/PlugIns -type f|grep -v plist|xargs nm|sort|uniq|wc -l
+    7677
+</code></pre>
+
+<p>Nope. Apple doesn’t want us to play with a whole bunch of their toys. 8445 of them. Some of them are pretty fun too :( Like <code>allproc</code>:</p>
+
+<pre><code>$ nm /mach_kernel|grep allproc
+ffffff80008d9e40 S _allproc
+$ find /System/Library/Extensions/System.kext/PlugIns -type f|grep -v plist|xargs nm|sort|uniq|grep allproc
+$ 
+</code></pre>
+
+<p>Damn. The <code>allproc</code> symbol is the head of the kernel’s list (the <code>queue(3)</code> kind of list) of running processes. It’s what gets queried when you run <code>ps(1)</code> or <code>top(1)</code>. Why do we want to find <code>allproc</code>? If we want to hide processes in a kernel rootkit that’s the best place to start. So, what happens if we build a kernel extension that imports <code>allproc</code> and try to load it?</p>
+
+<pre><code>bash-3.2# kextload AllProcRocks.kext
+/Users/admin/AllProcRocks.kext failed to load - (libkern/kext) link error; check the system/kernel logs for errors or try kextutil(8).
+</code></pre>
+
+<p>Console says:</p>
+
+<pre><code>25/02/12 6:30:47.000 PM kernel: kxld[ax.ho.kext.AllProcRocks]: The following symbols are unresolved for this kext:
+25/02/12 6:30:47.000 PM kernel: kxld[ax.ho.kext.AllProcRocks]: 	_allproc
+</code></pre>
+
+<p>OK, whatever.</p>
+
+<h2 id="what-do-we-do">What do we do?</h2>
+
+<p>There are a few steps that we need to take in order to resolve symbols in the kernel (or any other Mach-O binary):</p>
+
+<ul>
+  <li>Find the <code>__LINKEDIT</code> segment - this contains an array of <code>struct nlist_64</code>’s which represent all the symbols in the symbol table, and an array of symbol name strings.</li>
+  <li>Find the <code>LC_SYMTAB</code> load command - this contains the offsets within the file of the symbol and string tables.</li>
+  <li>Calculate the position of the string table within <code>__LINKEDIT</code> based on the offsets in the <code>LC_SYMTAB</code> load command.</li>
+  <li>Iterate through the <code>struct nlist_64</code>’s in <code>__LINKEDIT</code>, comparing the corresponding string in the string table to the name of the symbol we’re looking for until we find it (or reach the end of the symbol table).</li>
+  <li>Grab the address of the symbol from the <code>struct nlist_64</code> we’ve found.</li>
+</ul>
+
+<h2 id="parse-the-load-commands">Parse the load commands</h2>
+
+<p>One easy way to look at the symbol table would be to read the kernel file on disk at <code>/mach_kernel</code>, but we can do better than that if we’re already in the kernel - the kernel image is loaded into memory at a known address. If we have a look at the load commands for the kernel binary:</p>
+
+<pre><code>$ otool -l /mach_kernel
+/mach_kernel:
+Load command 0
+      cmd LC_SEGMENT_64
+  cmdsize 472
+  segname __TEXT
+   vmaddr 0xffffff8000200000
+   vmsize 0x000000000052f000
+  fileoff 0
+ filesize 5435392
+  maxprot 0x00000007
+ initprot 0x00000005
+   nsects 5
+    flags 0x0
+&lt;snip&gt;
+</code></pre>
+
+<p>We can see that the <code>vmaddr</code> field of the first segment is <code>0xffffff8000200000</code>. If we fire up GDB and point it at a VM running Mac OS X (as per my previous posts <a href="/posts/2012/02/debugging-the-mac-os-x-kernel-with-vmware-and-gdb/">here</a> and <a href="/posts/2012/02/vmware-hardware-debugging/">here</a>), we can see the start of the Mach-O header in memory at this address:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">x</span>/<span class="kc">xw</span> <span class="mh">0xffffff8000200000</span>
+<span class="mh">0xffffff8000200000</span>:	<span class="mh">0xfeedfacf</span></code></pre>
+
+<p><code>0xfeedfacf</code> is the magic number denoting a 64-bit Mach-O image (the 32-bit version is <code>0xfeedface</code>). We can actually display this as a struct if we’re using the DEBUG kernel with all the DWARF info:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">print</span> *(<span class="kt">struct mach_header_64 *</span>)<span class="mh">0xffffff8000200000</span>
+<span class="nv">$1</span> = {
+  <span class="nv">magic</span> = <span class="mh">0xfeedfacf</span>, 
+  <span class="nv">cputype</span> = <span class="mh">0x1000007</span>, 
+  <span class="nv">cpusubtype</span> = <span class="mh">0x3</span>, 
+  <span class="nv">filetype</span> = <span class="mh">0x2</span>, 
+  <span class="nv">ncmds</span> = <span class="mh">0x12</span>, 
+  <span class="nv">sizeofcmds</span> = <span class="mh">0x1010</span>, 
+  <span class="nv">flags</span> = <span class="mh">0x1</span>, 
+  <span class="nv">reserved</span> = <span class="mh">0x0</span>
+}</code></pre>
+
+<p>The <code>mach_header</code> and <code>mach_header_64</code> structs (along with the other Mach-O-related structs mentioned in this post) are documented in the <a href="https://developer.apple.com/library/mac/#documentation/developertools/conceptual/MachORuntime/Reference/reference.html">Mach-O File Format Reference</a>, but we aren’t particularly interested in the header at the moment. I recommend having a look at the kernel image with <a href="http://sourceforge.net/projects/machoview/">MachOView</a> to get the gist of where everything is and how it’s laid out.</p>
+
+<p>Directly following the Mach-O header is the first load command:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">set</span> <span class="nv">$mh</span><span class="o">=</span>(<span class="kt">struct mach_header_64 *</span>)<span class="mh">0xffffff8000200000</span>
+<span class="kt">gdb$</span> <span class="nb">print</span> *(<span class="kt">struct load_command*</span>)((void *)<span class="nv">$mh</span> + sizeof(struct mach_header_<span class="mh">64</span>))
+<span class="nv">$6</span> = {
+  <span class="nv">cmd</span> = <span class="mh">0x19</span>, 
+  <span class="nv">cmdsize</span> = <span class="mh">0x1d8</span>
+}</code></pre>
+
+<p>This is the load command for the first <code>__TEXT</code> segment we saw with <code>otool</code>. We can cast it as a <code>segment_command_64</code> in GDB and have a look:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">set</span> <span class="nv">$lc</span><span class="o">=</span>((void *)<span class="nv">$mh</span> + sizeof(struct mach_header_<span class="mh">64</span>))
+<span class="kt">gdb$</span> <span class="nb">print</span> *(<span class="kt">struct segment_command_64 *</span>)<span class="nv">$lc</span>
+<span class="nv">$7</span> = {
+  <span class="nv">cmd</span> = <span class="mh">0x19</span>, 
+  <span class="nv">cmdsize</span> = <span class="mh">0x1d8</span>, 
+  <span class="nv">segname</span> = <span class="s">"__TEXT\000\000\000\000\000\000\000\000\000"</span>, 
+  <span class="nv">vmaddr</span> = <span class="mh">0xffffff8000200000</span>, 
+  <span class="nv">vmsize</span> = <span class="mh">0x8c8000</span>, 
+  <span class="nv">fileoff</span> = <span class="mh">0x0</span>, 
+  <span class="nv">filesize</span> = <span class="mh">0x8c8000</span>, 
+  <span class="nv">maxprot</span> = <span class="mh">0x7</span>, 
+  <span class="nv">initprot</span> = <span class="mh">0x5</span>, 
+  <span class="nv">nsects</span> = <span class="mh">0x5</span>, 
+  <span class="nv">flags</span> = <span class="mh">0x0</span>
+}</code></pre>
+
+<p>This isn’t the load command we are looking for, so we have to iterate through all of them until we come across a segment with <code>cmd</code> of <code>0x19</code> (<code>LC_SEGMENT_64</code>) and <code>segname</code> of <code>__LINKEDIT</code>. In the debug kernel, this happens to be located at <code>0xffffff8000200e68</code>:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">set</span> <span class="nv">$lc</span><span class="o">=</span><span class="mh">0xffffff8000200e68</span>
+<span class="kt">gdb$</span> <span class="nb">print</span> *(<span class="kt">struct load_command*</span>)<span class="nv">$lc</span>   
+<span class="nv">$14</span> = {
+  <span class="nv">cmd</span> = <span class="mh">0x19</span>, 
+  <span class="nv">cmdsize</span> = <span class="mh">0x48</span>
+}
+<span class="kt">gdb$</span> <span class="nb">print</span> *(<span class="kt">struct segment_command_64*</span>)<span class="nv">$lc</span>
+<span class="nv">$16</span> = {
+  <span class="nv">cmd</span> = <span class="mh">0x19</span>, 
+  <span class="nv">cmdsize</span> = <span class="mh">0x48</span>, 
+  <span class="nv">segname</span> = <span class="s">"__LINKEDIT\000\000\000\000\000"</span>, 
+  <span class="nv">vmaddr</span> = <span class="mh">0xffffff8000d08000</span>, 
+  <span class="nv">vmsize</span> = <span class="mh">0x109468</span>, 
+  <span class="nv">fileoff</span> = <span class="mh">0xaf4698</span>, 
+  <span class="nv">filesize</span> = <span class="mh">0x109468</span>, 
+  <span class="nv">maxprot</span> = <span class="mh">0x7</span>, 
+  <span class="nv">initprot</span> = <span class="mh">0x1</span>, 
+  <span class="nv">nsects</span> = <span class="mh">0x0</span>, 
+  <span class="nv">flags</span> = <span class="mh">0x0</span>
+}</code></pre>
+
+<p>Then we grab the <code>vmaddr</code> field from the load command, which specifies the address at which the <code>__LINKEDIT</code> segment’s data will be located:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">set</span> <span class="nv">$linkedit</span><span class="o">=</span>((<span class="kt">struct segment_command_64*</span>)<span class="nv">$lc</span>)<span class="na">-&gt;vmaddr</span>
+<span class="kt">gdb$</span> <span class="nb">print</span> <span class="nv">$linkedit</span>
+$<span class="mh">19</span> <span class="o">=</span> <span class="mh">0xffffff8000d08000</span>
+<span class="kt">gdb$</span> <span class="nb">print</span> *(<span class="kt">struct nlist_64 *</span>)<span class="nv">$linkedit</span>
+<span class="nv">$20</span> = {
+  <span class="nv">n_un</span> = {
+    <span class="nv">n_strx</span> = <span class="mh">0x68a29</span>
+  }, 
+  <span class="nv">n_type</span> = <span class="mh">0xe</span>, 
+  <span class="nv">n_sect</span> = <span class="mh">0x1</span>, 
+  <span class="nv">n_desc</span> = <span class="mh">0x0</span>, 
+  <span class="nv">n_value</span> = <span class="mh">0xffffff800020a870</span>
+}</code></pre>
+
+<p>And there’s the first <code>struct nlist_64</code>.</p>
+
+<p>As for the <code>LC_SYMTAB</code> load command, we just need to iterate through the load commands until we find one with the <code>cmd</code> field value of <code>0x02</code> (<code>LC_SYMTAB</code>). In this case, it’s located at <code>0xffffff8000200eb0</code>:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">set</span> <span class="nv">$symtab</span><span class="o">=</span>*(<span class="kt">struct symtab_command*</span>)<span class="mh">0xffffff8000200eb0</span>
+<span class="kt">gdb$</span> <span class="nb">print</span> <span class="nv">$symtab</span>
+<span class="nv">$23</span> = {
+  <span class="nv">cmd</span> = <span class="mh">0x2</span>, 
+  <span class="nv">cmdsize</span> = <span class="mh">0x18</span>, 
+  <span class="nv">symoff</span> = <span class="mh">0xaf4698</span>, 
+  <span class="nv">nsyms</span> = <span class="mh">0x699d</span>, 
+  <span class="nv">stroff</span> = <span class="mh">0xb5e068</span>, 
+  <span class="nv">strsize</span> = <span class="mh">0x9fa98</span>
+}</code></pre>
+
+<p>The useful parts here are the <code>symoff</code> field, which specifies the offset in the file to the symbol table (start of the <code>__LINKEDIT</code> segment), and the <code>stroff</code> field, which specifies the offset in the file to the string table (somewhere in the middle of the <code>__LINKEDIT</code> segment). Why, you ask, did we need to find the <code>__LINKEDIT</code> segment as well, since we have the offset here in the <code>LC_SYMTAB</code> command? If we were looking at the file on disk we wouldn’t have needed to, but as the kernel image we’re inspecting has already been loaded into memory, the binary segments have been loaded at the virtual memory addresses specified in their load commands. This means that the <code>symoff</code> and <code>stroff</code> fields are not correct any more. However, they’re still useful, as the difference between the two helps us figure out the offset into the <code>__LINKEDIT</code> segment at which the string table exists:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">print</span> <span class="nv">$linkedit</span>
+$<span class="mh">24</span> <span class="o">=</span> <span class="mh">0xffffff8000d08000</span>
+<span class="kt">gdb$</span> <span class="nb">print</span> <span class="nv">$linkedit</span> + (<span class="nv">$symtab</span><span class="na">-&gt;stroff</span> - <span class="nv">$symtab</span><span class="na">-&gt;symoff</span>)
+$<span class="mh">25</span> <span class="o">=</span> <span class="mh">0xffffff8000d719d0</span>
+<span class="kt">gdb$</span> <span class="nb">set</span> <span class="nv">$strtab</span><span class="o">=</span><span class="nv">$linkedit</span> + (<span class="nv">$symtab</span><span class="na">-&gt;stroff</span> - <span class="nv">$symtab</span><span class="na">-&gt;symoff</span>)
+<span class="kt">gdb$</span> <span class="nb">x</span>/<span class="mi">16</span><span class="kc">s</span> <span class="nv">$strtab</span>
+<span class="mh">0xffffff8000d719d0</span>:	 <span class="s">""</span>
+<span class="mh">0xffffff8000d719d1</span>:	 <span class="s">""</span>
+<span class="mh">0xffffff8000d719d2</span>:	 <span class="s">""</span>
+<span class="mh">0xffffff8000d719d3</span>:	 <span class="s">""</span>
+<span class="mh">0xffffff8000d719d4</span>:	 <span class="s">".constructors_used"</span>
+<span class="mh">0xffffff8000d719e7</span>:	 <span class="s">".destructors_used"</span>
+<span class="mh">0xffffff8000d719f9</span>:	 <span class="s">"_AddFileExtent"</span>
+<span class="mh">0xffffff8000d71a08</span>:	 <span class="s">"_AllocateNode"</span>
+<span class="mh">0xffffff8000d71a16</span>:	 <span class="s">"_Assert"</span>
+<span class="mh">0xffffff8000d71a1e</span>:	 <span class="s">"_BF_decrypt"</span>
+<span class="mh">0xffffff8000d71a2a</span>:	 <span class="s">"_BF_encrypt"</span>
+<span class="mh">0xffffff8000d71a36</span>:	 <span class="s">"_BF_set_key"</span>
+<span class="mh">0xffffff8000d71a42</span>:	 <span class="s">"_BTClosePath"</span>
+<span class="mh">0xffffff8000d71a4f</span>:	 <span class="s">"_BTDeleteRecord"</span>
+<span class="mh">0xffffff8000d71a5f</span>:	 <span class="s">"_BTFlushPath"</span>
+<span class="mh">0xffffff8000d71a6c</span>:	 <span class="s">"_BTGetInformation"</span></code></pre>
+
+<h2 id="actually-finding-some-symbols">Actually finding some symbols</h2>
+
+<p>Now that we know where the symbol table and string table live, we can get on to the srs bznz. So, let’s find that damn <code>_allproc</code> symbol we need. Have a look at that first <code>struct nlist_64</code> again:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">print</span> *(<span class="kt">struct nlist_64 *</span>)<span class="nv">$linkedit</span>
+<span class="nv">$28</span> = {
+  <span class="nv">n_un</span> = {
+    <span class="nv">n_strx</span> = <span class="mh">0x68a29</span>
+  }, 
+  <span class="nv">n_type</span> = <span class="mh">0xe</span>, 
+  <span class="nv">n_sect</span> = <span class="mh">0x1</span>, 
+  <span class="nv">n_desc</span> = <span class="mh">0x0</span>, 
+  <span class="nv">n_value</span> = <span class="mh">0xffffff800020a870</span>
+}</code></pre>
+
+<p>The <code>n_un.nstrx</code> field there specifies the offset into the string table at which the string corresponding to this symbol exists. If we add that offset to the address at which the string table starts, we’ll see the symbol name:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">x</span>/<span class="kc">s</span> <span class="nv">$strtab</span> + ((<span class="kt">struct nlist_64 *</span>)<span class="nv">$linkedit</span>)<span class="na">-&gt;n_un.n_strx</span>
+<span class="mh">0xffffff8000dda3f9</span>:	 <span class="s">"_ps_vnode_trim_init"</span></code></pre>
+
+<p>Now all we need to do is iterate through all the <code>struct nlist_64</code>’s until we find the one with the matching name. In this case it’s at <code>0xffffff8000d482a0</code>:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">set</span> <span class="nv">$nlist</span><span class="o">=</span><span class="mh">0xffffff8000d482a0</span>
+<span class="kt">gdb$</span> <span class="nb">print</span> *(<span class="kt">struct nlist_64*</span>)<span class="nv">$nlist</span>
+<span class="nv">$31</span> = {
+  <span class="nv">n_un</span> = {
+    <span class="nv">n_strx</span> = <span class="mh">0x35a07</span>
+  }, 
+  <span class="nv">n_type</span> = <span class="mh">0xf</span>, 
+  <span class="nv">n_sect</span> = <span class="mh">0xb</span>, 
+  <span class="nv">n_desc</span> = <span class="mh">0x0</span>, 
+  <span class="nv">n_value</span> = <span class="mh">0xffffff8000cb5ca0</span>
+}
+<span class="kt">gdb$</span> <span class="nb">x</span>/<span class="kc">s</span> <span class="nv">$strtab</span> + ((<span class="kt">struct nlist_64 *</span>)<span class="nv">$nlist</span>)<span class="na">-&gt;n_un.n_strx</span>
+<span class="mh">0xffffff8000da73d7</span>:	 <span class="s">"_allproc"</span></code></pre>
+
+<p>The <code>n_value</code> field there (<code>0xffffff8000cb5ca0</code>) is the virtual memory address at which the symbol’s data/code exists. <code>_allproc</code> is not a great example as it’s a piece of data, rather than a function, so let’s try it with a function:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">set</span> <span class="nv">$nlist</span><span class="o">=</span><span class="mh">0xffffff8000d618f0</span>
+<span class="kt">gdb$</span> <span class="nb">print</span> *(<span class="kt">struct nlist_64*</span>)<span class="nv">$nlist</span>
+<span class="nv">$32</span> = {
+  <span class="nv">n_un</span> = {
+    <span class="nv">n_strx</span> = <span class="mh">0x52ed3</span>
+  }, 
+  <span class="nv">n_type</span> = <span class="mh">0xf</span>, 
+  <span class="nv">n_sect</span> = <span class="mh">0x1</span>, 
+  <span class="nv">n_desc</span> = <span class="mh">0x0</span>, 
+  <span class="nv">n_value</span> = <span class="mh">0xffffff80007cceb0</span>
+}
+<span class="kt">gdb$</span> <span class="nb">x</span>/<span class="kc">s</span> <span class="nv">$strtab</span> + ((<span class="kt">struct nlist_64 *</span>)<span class="nv">$nlist</span>)<span class="na">-&gt;n_un.n_strx</span>
+<span class="mh">0xffffff8000dc48a3</span>:	 <span class="s">"_proc_lock"</span></code></pre>
+
+<p>If we disassemble a few instructions at that address:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">x</span>/<span class="mi">12</span><span class="kc">i</span> <span class="mh">0xffffff80007cceb0</span>
+<span class="mh">0xffffff80007cceb0</span> <span class="nf">&lt;proc_lock&gt;</span>:	push   rbp
+<span class="mh">0xffffff80007cceb1</span> <span class="nf">&lt;proc_lock+1&gt;</span>:	mov    rbp,rsp
+<span class="mh">0xffffff80007cceb4</span> <span class="nf">&lt;proc_lock+4&gt;</span>:	sub    rsp,<span class="mh">0x10</span>
+<span class="mh">0xffffff80007cceb8</span> <span class="nf">&lt;proc_lock+8&gt;</span>:	mov    QWORD PTR [rbp-<span class="mh">0x8</span>],rdi
+<span class="mh">0xffffff80007ccebc</span> <span class="nf">&lt;proc_lock+12&gt;</span>:	mov    rax,QWORD PTR [rbp-<span class="mh">0x8</span>]
+<span class="mh">0xffffff80007ccec0</span> <span class="nf">&lt;proc_lock+16&gt;</span>:	mov    rcx,<span class="mh">0x50</span>
+<span class="mh">0xffffff80007cceca</span> <span class="nf">&lt;proc_lock+26&gt;</span>:	add    rax,rcx
+<span class="mh">0xffffff80007ccecd</span> <span class="nf">&lt;proc_lock+29&gt;</span>:	mov    rdi,rax
+<span class="mh">0xffffff80007cced0</span> <span class="nf">&lt;proc_lock+32&gt;</span>:	call   <span class="mh">0xffffff800035d270</span> <span class="nf">&lt;lck_mtx_lock&gt;</span>
+<span class="mh">0xffffff80007cced5</span> <span class="nf">&lt;proc_lock+37&gt;</span>:	add    rsp,<span class="mh">0x10</span>
+<span class="mh">0xffffff80007cced9</span> <span class="nf">&lt;proc_lock+41&gt;</span>:	pop    rbp
+<span class="mh">0xffffff80007cceda</span> <span class="nf">&lt;proc_lock+42&gt;</span>:	ret</code></pre>
+
+<p>We can see that GDB has resolved the symbol for us, and we’re right on the money.</p>
+
+<h2 id="sample-code">Sample code</h2>
+
+<p>I’ve posted an example kernel extension on <a href="https://github.com/snarez/KernelResolver">github</a> to check out. When we load it with <code>kextload KernelResolver.kext</code>, we should see something like this on the console:</p>
+
+<pre><code>25/02/12 8:06:49.000 PM kernel: [+] _allproc @ 0xffffff8000cb5ca0
+25/02/12 8:06:49.000 PM kernel: [+] _proc_lock @ 0xffffff80007cceb0
+25/02/12 8:06:49.000 PM kernel: [+] _kauth_cred_setuidgid @ 0xffffff80007abbb0
+25/02/12 8:06:49.000 PM kernel: [+] __ZN6OSKext13loadFromMkextEjPcjPS0_Pj @ 0xffffff80008f8606
+</code></pre>
+
+<p><strong>Update</strong>: It was brought to my attention that I was using a debug kernel in these examples. Just to be clear - the method described in this post, as well as the sample code, works on a non-debug, default install &gt;=10.7.0 (xnu-1699.22.73) kernel as well, but the GDB inspection probably won’t (unless you load up the struct definitions etc, as they are all stored in the DEBUG kernel). The debug kernel contains every symbol from the source, whereas many symbols are stripped from the distribution kernel (e.g. <code>sLoadedKexts</code>). Previously (before 10.7), the kernel would write out the symbol table to a file on disk and jettison it from memory altogether. I suppose when kernel extensions were loaded, <code>kextd</code> or <code>kextload</code> would resolve symbols from within that on-disk symbol table or from the on-disk kernel image. These days the symbol table memory is just marked as pageable, so it can potentially get paged out if the system is short of memory.</p>
+
+<p>I hope somebody finds this useful. Shoot me an email or get at me on twitter if you have any questions. I’ll probably sort out comments for this blog at some point, but I cbf at the moment.</p>
+
+
+  
+	<hr/>
+  
+
+              </div>
+            </div>
+            <div class="grid_3">
+              <div id="sidebar">
+                <h2>PAGES</h2>
+                <ul>
+                  <li><a href="/">Home</a></li>
+                  <li><a href="/about">About</a></li>
+                  <li><a href="/downloads">Downloads</a></li>
+                </ul>
+                <h2>TAGS</h2>
+                <p><a class="tagcloud" style="font-size:78.23529411764706%;" href="/tag/voltron/" rel="tag">voltron</a> <a class="tagcloud" style="font-size:85.29411764705883%;" href="/tag/debugging/" rel="tag">debugging</a> <a class="tagcloud" style="font-size:85.29411764705883%;" href="/tag/gdb/" rel="tag">gdb</a> <a class="tagcloud" style="font-size:64.11764705882352%;" href="/tag/lldb/" rel="tag">lldb</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/calculon/" rel="tag">calculon</a> <a class="tagcloud" style="font-size:120.58823529411765%;" href="/tag/efi/" rel="tag">efi</a> <a class="tagcloud" style="font-size:71.17647058823529%;" href="/tag/ida pro/" rel="tag">ida pro</a> <a class="tagcloud" style="font-size:64.11764705882352%;" href="/tag/idapython/" rel="tag">idapython</a> <a class="tagcloud" style="font-size:64.11764705882352%;" href="/tag/reversing/" rel="tag">reversing</a> <a class="tagcloud" style="font-size:85.29411764705883%;" href="/tag/rootkits/" rel="tag">rootkits</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/refind/" rel="tag">refind</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/black hat/" rel="tag">black hat</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/firmware/" rel="tag">firmware</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/bus pirate/" rel="tag">bus pirate</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/flashrom/" rel="tag">flashrom</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/pci/" rel="tag">pci</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/syscan/" rel="tag">syscan</a> <a class="tagcloud" style="font-size:78.23529411764706%;" href="/tag/mac os x/" rel="tag">mac os x</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/x86-64/" rel="tag">x86-64</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/clang/" rel="tag">clang</a> <a class="tagcloud" style="font-size:71.17647058823529%;" href="/tag/kernel/" rel="tag">kernel</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/kexts/" rel="tag">kexts</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/mach-o/" rel="tag">mach-o</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/python/" rel="tag">python</a> <a class="tagcloud" style="font-size:64.11764705882352%;" href="/tag/vmware/" rel="tag">vmware</a> </p>
+                <h2>POSTS</h2>
+                <ul>
+                  
+                    <li><a href="/posts/2015/05/building-voltron-command-plugins/">Building Voltron Command Plugins</a></li>
+                  
+                    <li><a href="/posts/2014/12/building-voltron-views/">Building Voltron Views</a></li>
+                  
+                    <li><a href="/posts/2013/10/calculon-a-calculator-for-nerds/">Calculon - a calculator for nerds</a></li>
+                  
+                    <li><a href="/posts/2013/06/voltron-a-hacky-ui-for-gdb/">Voltron - a hacky UI for GDB</a></li>
+                  
+                    <li><a href="/posts/2012/12/te-loader-for-ida-pro/">TE loader for IDA Pro</a></li>
+                  
+                    <li><a href="/posts/2012/10/ruxcon/">Ruxcon 2012</a></li>
+                  
+                    <li><a href="/posts/2012/09/ida-pro-scripts-for-efi-reversing/">IDA Pro scripts for EFI reversing</a></li>
+                  
+                    <li><a href="/posts/2012/08/building-refind-with-edk2-on-osx/">Building rEFInd with EDKII on Mac OS X</a></li>
+                  
+                    <li><a href="/posts/2012/07/black-hat-usa-2012/">Black Hat USA 2012</a></li>
+                  
+                    <li><a href="/posts/2012/06/unbricking-a-macbook/">Un-bricking a MacBook</a></li>
+                  
+                    <li><a href="/posts/2012/06/send-me-your-lspci/">Send me your `lspci -vv`</a></li>
+                  
+                    <li><a href="/posts/2012/05/syscan-2012-is-over/">SyScan 2012 is Over</a></li>
+                  
+                    <li><a href="/posts/2012/03/rip-relative-addressing-and-kernel-payloads/">RIP-Relative Addressing and Kernel Payloads</a></li>
+                  
+                    <li><a href="/posts/2012/02/resolving-kernel-symbols/">Resolving kernel symbols</a></li>
+                  
+                    <li><a href="/posts/2012/02/carving-up-efi-fat-binaries/">Carving up EFI fat binaries</a></li>
+                  
+                    <li><a href="/posts/2012/02/vmware-hardware-debugging/">VMware debugging II&#58; "Hardware" debugging</a></li>
+                  
+                    <li><a href="/posts/2012/02/debugging-the-mac-os-x-kernel-with-vmware-and-gdb/">Debugging the Mac OS X kernel with VMware and GDB</a></li>
+                  
+                </ul>
+                <h2>SEARCH</h2>
+                <form method="get" action="http://www.google.com/search">
+                  <fieldset>
+                    <input type="hidden" name="sitesearch" value="ho.ax"/>
+                    <input type="text" class="searchbox" name="q" size="31" maxlength="255" value=""/>
+                    <input type="image" class="searchbutton" width=24 height=24 src="/img/search.png" value="Search"/>
+                  </fieldset>
+                </form>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="splitbar">&nbsp;</div>
+      <div id="footer">
+          <div class="container_12">
+            <div class="grid_9">
+              <p>Last updated on 9 May 2015 by . Please don't steal my stuff.</p>
+            </div>
+            <div class="grid_3">
+              <div class="media">
+                <div style="float: left"><a class="twitter" href="http://twitter.com/snare"></a></div>
+                <div style="float: left"><a class="rss" href="/feed.xml"></a></div>
+              </div>
+            </div>
+        </div>
+      </div>
+    </div>
+  <script type="text/javascript">
+
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-29183428-1']);
+  _gaq.push(['_trackPageview']);
+
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+
+  </script>
+  <img src="/img/twitter_active.png" style="display: none" />
+  <img src="/img/rss_active.png" style="display: none" />
+  </body>
+</html>

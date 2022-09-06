@@ -1,0 +1,278 @@
+<!DOCTYPE HTML>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>ho.ax - </title>
+    <link rel="stylesheet" type="text/css" href="/css/reset.css" media="screen">
+    <link rel="stylesheet" type="text/css" href="/css/grid.css" media="screen">
+    <link rel="stylesheet" type="text/css" href="/css/style.css" media="screen">
+    <link rel="stylesheet" type="text/css" href="/css/highlight.css" media="screen">
+    <link rel="alternate" type="application/rss+xml" title="RSS" href="http://ho.ax/feed.xml">
+  </head>
+  <body>
+      <div id="container">
+        <div id="header">
+          <div class="container_12">
+            <div class="grid_6">
+              <h1><a href="/">ho/ax.</a></h1>
+            </div>
+            <div class="grid_6">
+              <div class="media">
+                <div style="float: left"><a class="twitter" href="http://twitter.com/snare"></a></div>
+                <div style="float: left"><a class="rss" href="/feed.xml"></a></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div id="splitbar">&nbsp;</div>
+        <div id="main">
+          <div class="container_12">
+            <div class="grid_9">
+              <div id="content">
+                
+  <h1><a href="/posts/2012/03/rip-relative-addressing-and-kernel-payloads/">RIP-Relative Addressing and Kernel Payloads</a></h1>
+<p class="metadata">
+	Posted by snare on 9 March 2012. Tags: <a class="tag" href="/tag/mac os x/" rel="tag">mac os x</a>, <a class="tag" href="/tag/x86-64/" rel="tag">x86-64</a>, <a class="tag" href="/tag/clang/" rel="tag">clang</a>
+</p>
+
+<p>The x86-64 architecture introduced a new way to generate Position-Independent Code (PIC) – RIP-relative addressing. RIP-relative addressing works by referencing data and functions by an address relative to the current instruction pointer, so that “fixups” are not needed for local functions when relocating a piece of code to a base address other than that for which it was linked. I won’t go into too much detail about load-time relocation or PIC on x86, but if you’re interested in the details I recommend reading Eli Bendersky’s excellent write ups on how <a href="http://eli.thegreenplace.net/2011/08/25/load-time-relocation-of-shared-libraries/">load-time relocation</a>, <a href="http://eli.thegreenplace.net/2011/11/03/position-independent-code-pic-in-shared-libraries/">x86 PIC</a> and <a href="http://eli.thegreenplace.net/2011/11/11/position-independent-code-pic-in-shared-libraries-on-x64/">x86_64 PIC</a> work on Linux/ELF, as the concepts are fairly similar to how it works on OS X/Mach-O.</p>
+
+<p>RIP-relative addressing became a bit of a problem for me when I was generating kernel payloads that I wanted to be able to relocate to different areas of memory. I’ll explain by way of example.</p>
+
+<p>Consider the following dummy kernel extension:</p>
+
+<pre><code class="language-c"><span class="cp">#include &lt;mach/mach_types.h&gt;</span>
+<span class="cp">#include &lt;sys/systm.h&gt;</span>
+
+<span class="n">kern_return_t</span> <span class="n">TestPayload_start</span><span class="p">(</span><span class="n">kmod_info_t</span> <span class="o">*</span> <span class="n">ki</span><span class="p">,</span> <span class="kt">void</span> <span class="o">*</span><span class="n">d</span><span class="p">);</span>
+<span class="n">kern_return_t</span> <span class="n">TestPayload_stop</span><span class="p">(</span><span class="n">kmod_info_t</span> <span class="o">*</span><span class="n">ki</span><span class="p">,</span> <span class="kt">void</span> <span class="o">*</span><span class="n">d</span><span class="p">);</span>
+
+<span class="n">kern_return_t</span> <span class="nf">TestPayload_start</span><span class="p">(</span><span class="n">kmod_info_t</span> <span class="o">*</span> <span class="n">ki</span><span class="p">,</span> <span class="kt">void</span> <span class="o">*</span><span class="n">d</span><span class="p">)</span>
+<span class="p">{</span>
+    <span class="n">printf</span><span class="p">(</span><span class="s">"sup</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
+    <span class="k">return</span> <span class="n">KERN_SUCCESS</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="n">kern_return_t</span> <span class="nf">TestPayload_stop</span><span class="p">(</span><span class="n">kmod_info_t</span> <span class="o">*</span><span class="n">ki</span><span class="p">,</span> <span class="kt">void</span> <span class="o">*</span><span class="n">d</span><span class="p">)</span>
+<span class="p">{</span>
+    <span class="k">return</span> <span class="n">KERN_SUCCESS</span><span class="p">;</span>
+<span class="p">}</span></code></pre>
+
+<p>This is only slightly modified from the default code that is generated when we create a new Kernel Extension project in Xcode – I just added the <code>printf()</code> and relevant <code>#include</code>. If we compile this in the normal way with Xcode, and disassemble the executable:</p>
+
+<pre><code>$ otool -tv TestPayload.kext/Contents/MacOS/TestPayload
+_TestPayload_start:
+0000000000000f20	pushq	%rbp
+0000000000000f21	movq	%rsp,%rbp
+0000000000000f24	subq	$0x20,%rsp
+0000000000000f28	movq	%rdi,0xf8(%rbp)
+0000000000000f2c	movq	%rsi,0xf0(%rbp)
+0000000000000f30	xorb	%al,%al
+0000000000000f32	leaq	0x000000b3(%rip),%rcx
+0000000000000f39	movq	%rcx,%rdi
+0000000000000f3c	callq	0x00000f41
+0000000000000f41	movl	$0x00000000,0xe8(%rbp)
+0000000000000f48	movl	0xe8(%rbp),%eax
+0000000000000f4b	movl	%eax,0xec(%rbp)
+0000000000000f4e	movl	0xec(%rbp),%eax
+0000000000000f51	addq	$0x20,%rsp
+0000000000000f55	popq	%rbp
+0000000000000f56	ret
+0000000000000f57	nopw	0x00000000(%rax,%rax)
+_TestPayload_stop:
+0000000000000f60	pushq	%rbp
+0000000000000f61	movq	%rsp,%rbp
+0000000000000f64	subq	$0x18,%rsp
+0000000000000f68	movq	%rdi,0xf8(%rbp)
+0000000000000f6c	movq	%rsi,0xf0(%rbp)
+0000000000000f70	movl	$0x00000000,0xe8(%rbp)
+0000000000000f77	movl	0xe8(%rbp),%eax
+0000000000000f7a	movl	%eax,0xec(%rbp)
+0000000000000f7d	movl	0xec(%rbp),%eax
+0000000000000f80	addq	$0x18,%rsp
+0000000000000f84	popq	%rbp
+0000000000000f85	ret
+&lt;snip&gt;
+</code></pre>
+
+<p>Note the <code>callq 0x00000f41</code> at <code>0xf3c</code> there – that’s the call to <code>printf()</code>. If we dump the section without disassembling:</p>
+
+<pre><code>$ otool -t TestPayload.kext/Contents/MacOS/TestPayload 
+TestPayload:
+(__TEXT,__text) section
+0000000000000f20 55 48 89 e5 48 83 ec 20 48 89 7d f8 48 89 75 f0 
+0000000000000f30 30 c0 48 8d 0d b3 00 00 00 48 89 cf e8 00 00 00 
+0000000000000f40 00 c7 45 e8 00 00 00 00 8b 45 e8 89 45 ec 8b 45 
+0000000000000f50 ec 48 83 c4 20 5d c3 66 0f 1f 84 00 00 00 00 00 
+0000000000000f60 55 48 89 e5 48 83 ec 18 48 89 7d f8 48 89 75 f0 
+0000000000000f70 c7 45 e8 00 00 00 00 8b 45 e8 89 45 ec 8b 45 ec 
+0000000000000f80 48 83 c4 18 5d c3 55 48 89 e5 48 8d 05 37 01 00 
+0000000000000f90 00 48 8b 00 48 85 c0 75 04 31 c0 5d c3 5d ff e0 
+0000000000000fa0 55 48 89 e5 48 8d 05 55 00 00 00 48 83 c0 10 5d 
+0000000000000fb0 c3 55 48 89 e5 48 8d 05 44 00 00 00 48 83 c0 50 
+0000000000000fc0 5d c3 55 48 89 e5 48 8d 05 33 00 00 00 8b 40 0c 
+0000000000000fd0 5d c3 55 48 89 e5 48 8d 05 f3 00 00 00 48 8b 00 
+0000000000000fe0 48 85 c0 75 04 31 c0 5d c3 5d ff e0 
+</code></pre>
+
+<p>We can see at <code>0xf3c</code> an instruction that looks like <code>e8 00 00 00 00</code> – this is a RIP-relative <code>call</code> instruction opcode (<code>e8</code>), followed by the 32-bit displacement (<code>00 00 00 00</code>). This is supposed to be the <code>printf()</code> call? Well, yeah. The compiler doesn’t know the address of the <code>printf()</code> function in the kernel at compile time, so it puts in <code>0x0</code> as a placeholder which will be updated when the executable is loaded and linked by KXLD. So how does KXLD know that this instruction needs updating? Relocation entries. Have a look at the relocation entries for the executable:</p>
+
+<pre><code>$ otool -r TestPayload.kext/Contents/MacOS/TestPayload 
+TestPayload.kext/Contents/MacOS/TestPayload:
+External relocation information 1 entries
+address  pcrel length extern type    scattered symbolnum/value
+00000f3d 1     2      1      2       0         31
+&lt;snip&gt;
+</code></pre>
+
+<p>We’re only concerned about the external relocations in this instance – we can see there is only one of these, and its address (offset within the executable file) is <code>0xf3d</code>. This happens to be one byte after the <code>e8</code> (<code>call</code>) instruction – the location of the displacement value for the RIP-relative call. It’s also worth noting there that the <code>pcrel</code> field is 1 – indicating that this is, in fact, a RIP-relative instruction. The other fields give the linker more information about how the relocation entry should be handled. You can find more info about these fields in the <a href="https://developer.apple.com/library/mac/#documentation/developertools/conceptual/MachORuntime/Reference/reference.html%23//apple_ref/c/tag/relocation_info">ABI documentation</a>.</p>
+
+<p>So, back to my kernel payloads – I wanted to be able to move the payload around in memory without having to update the relocation entries each time, as that would require keeping the code to perform this updating within the payload. There are a few compiler options for generating slightly-more-position-independent code, but the OS X version of GCC doesn’t seem to support them. Fortunately, Clang does. If we compile with the <code>-mcmodel=large</code> option (by adding it to the “Other C Flags” field in the Xcode build settings), and disassemble the executable:</p>
+
+<pre><code>$ otool -tv TestPayload.kext/Contents/MacOS/TestPayload 
+TestPayload.kext/Contents/MacOS/TestPayload:
+(__TEXT,__text) section
+_TestPayload_start:
+0000000000000f30	pushq	%rbp
+0000000000000f31	movq	%rsp,%rbp
+0000000000000f34	subq	$0x20,%rsp
+0000000000000f38	movq	%rdi,0xf8(%rbp)
+0000000000000f3c	movq	%rsi,0xf0(%rbp)
+0000000000000f40	xorb	%al,%al
+0000000000000f42	movq	$0x0000000000000ff1,%rdi
+0000000000000f4c	movq	$0x0000000000000000,%rsi
+0000000000000f56	call	*%rsi
+0000000000000f58	movl	$0x00000000,%ecx
+0000000000000f5d	movl	%eax,0xec(%rbp)
+0000000000000f60	movl	%ecx,%eax
+0000000000000f62	addq	$0x20,%rsp
+0000000000000f66	popq	%rbp
+0000000000000f67	ret
+0000000000000f68	nopl	0x00000000(%rax,%rax)
+_TestPayload_stop:
+0000000000000f70	pushq	%rbp
+0000000000000f71	movq	%rsp,%rbp
+0000000000000f74	subq	$0x10,%rsp
+0000000000000f78	movl	$0x00000000,%eax
+0000000000000f7d	movq	%rdi,0xf8(%rbp)
+0000000000000f81	movq	%rsi,0xf0(%rbp)
+0000000000000f85	addq	$0x10,%rsp
+0000000000000f89	popq	%rbp
+0000000000000f8a	ret
+&lt;snip&gt;
+</code></pre>
+
+<p>Now we have a <code>call</code> with an absolute 64-bit address by moving the address of the function into a register and <code>call</code>ing the value of that register. If we have a look at the relocation entries now:</p>
+
+<pre><code>$ otool -r TestPayload.kext/Contents/MacOS/TestPayload 
+TestPayload.kext/Contents/MacOS/TestPayload:
+External relocation information 1 entries
+address  pcrel length extern type    scattered symbolnum/value
+00000f4e 0     3      1      0       0         31
+&lt;snip&gt;
+</code></pre>
+
+<p>Notice <code>pcrel</code> is now 0, as it’s an absolute 64-bit address that we’re updating instead of a 32-bit displacement from RIP. This means that we can look up the address of the symbol (e.g. <code>printf()</code>) once when we initially load the payload, and update the relocation entry (or entries) to point to that address. Unfortunately this inflates the size of the code a bit, as all function calls are treated this way, which kind of defeats the purpose of trimming the relocation code – once we reach a certain payload size anyway. Oh well, it’s still a bit easier to handle. Next stop might be to write an LLVM pass to convert only external calls to absolute calls.</p>
+
+<p>I’m not sure how useful this will be to others, but I thought it was interesting!</p>
+
+
+  
+	<hr/>
+  
+
+              </div>
+            </div>
+            <div class="grid_3">
+              <div id="sidebar">
+                <h2>PAGES</h2>
+                <ul>
+                  <li><a href="/">Home</a></li>
+                  <li><a href="/about">About</a></li>
+                  <li><a href="/downloads">Downloads</a></li>
+                </ul>
+                <h2>TAGS</h2>
+                <p><a class="tagcloud" style="font-size:78.23529411764706%;" href="/tag/voltron/" rel="tag">voltron</a> <a class="tagcloud" style="font-size:85.29411764705883%;" href="/tag/debugging/" rel="tag">debugging</a> <a class="tagcloud" style="font-size:85.29411764705883%;" href="/tag/gdb/" rel="tag">gdb</a> <a class="tagcloud" style="font-size:64.11764705882352%;" href="/tag/lldb/" rel="tag">lldb</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/calculon/" rel="tag">calculon</a> <a class="tagcloud" style="font-size:120.58823529411765%;" href="/tag/efi/" rel="tag">efi</a> <a class="tagcloud" style="font-size:71.17647058823529%;" href="/tag/ida pro/" rel="tag">ida pro</a> <a class="tagcloud" style="font-size:64.11764705882352%;" href="/tag/idapython/" rel="tag">idapython</a> <a class="tagcloud" style="font-size:64.11764705882352%;" href="/tag/reversing/" rel="tag">reversing</a> <a class="tagcloud" style="font-size:85.29411764705883%;" href="/tag/rootkits/" rel="tag">rootkits</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/refind/" rel="tag">refind</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/black hat/" rel="tag">black hat</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/firmware/" rel="tag">firmware</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/bus pirate/" rel="tag">bus pirate</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/flashrom/" rel="tag">flashrom</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/pci/" rel="tag">pci</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/syscan/" rel="tag">syscan</a> <a class="tagcloud" style="font-size:78.23529411764706%;" href="/tag/mac os x/" rel="tag">mac os x</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/x86-64/" rel="tag">x86-64</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/clang/" rel="tag">clang</a> <a class="tagcloud" style="font-size:71.17647058823529%;" href="/tag/kernel/" rel="tag">kernel</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/kexts/" rel="tag">kexts</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/mach-o/" rel="tag">mach-o</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/python/" rel="tag">python</a> <a class="tagcloud" style="font-size:64.11764705882352%;" href="/tag/vmware/" rel="tag">vmware</a> </p>
+                <h2>POSTS</h2>
+                <ul>
+                  
+                    <li><a href="/posts/2015/05/building-voltron-command-plugins/">Building Voltron Command Plugins</a></li>
+                  
+                    <li><a href="/posts/2014/12/building-voltron-views/">Building Voltron Views</a></li>
+                  
+                    <li><a href="/posts/2013/10/calculon-a-calculator-for-nerds/">Calculon - a calculator for nerds</a></li>
+                  
+                    <li><a href="/posts/2013/06/voltron-a-hacky-ui-for-gdb/">Voltron - a hacky UI for GDB</a></li>
+                  
+                    <li><a href="/posts/2012/12/te-loader-for-ida-pro/">TE loader for IDA Pro</a></li>
+                  
+                    <li><a href="/posts/2012/10/ruxcon/">Ruxcon 2012</a></li>
+                  
+                    <li><a href="/posts/2012/09/ida-pro-scripts-for-efi-reversing/">IDA Pro scripts for EFI reversing</a></li>
+                  
+                    <li><a href="/posts/2012/08/building-refind-with-edk2-on-osx/">Building rEFInd with EDKII on Mac OS X</a></li>
+                  
+                    <li><a href="/posts/2012/07/black-hat-usa-2012/">Black Hat USA 2012</a></li>
+                  
+                    <li><a href="/posts/2012/06/unbricking-a-macbook/">Un-bricking a MacBook</a></li>
+                  
+                    <li><a href="/posts/2012/06/send-me-your-lspci/">Send me your `lspci -vv`</a></li>
+                  
+                    <li><a href="/posts/2012/05/syscan-2012-is-over/">SyScan 2012 is Over</a></li>
+                  
+                    <li><a href="/posts/2012/03/rip-relative-addressing-and-kernel-payloads/">RIP-Relative Addressing and Kernel Payloads</a></li>
+                  
+                    <li><a href="/posts/2012/02/resolving-kernel-symbols/">Resolving kernel symbols</a></li>
+                  
+                    <li><a href="/posts/2012/02/carving-up-efi-fat-binaries/">Carving up EFI fat binaries</a></li>
+                  
+                    <li><a href="/posts/2012/02/vmware-hardware-debugging/">VMware debugging II&#58; "Hardware" debugging</a></li>
+                  
+                    <li><a href="/posts/2012/02/debugging-the-mac-os-x-kernel-with-vmware-and-gdb/">Debugging the Mac OS X kernel with VMware and GDB</a></li>
+                  
+                </ul>
+                <h2>SEARCH</h2>
+                <form method="get" action="http://www.google.com/search">
+                  <fieldset>
+                    <input type="hidden" name="sitesearch" value="ho.ax"/>
+                    <input type="text" class="searchbox" name="q" size="31" maxlength="255" value=""/>
+                    <input type="image" class="searchbutton" width=24 height=24 src="/img/search.png" value="Search"/>
+                  </fieldset>
+                </form>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="splitbar">&nbsp;</div>
+      <div id="footer">
+          <div class="container_12">
+            <div class="grid_9">
+              <p>Last updated on 9 May 2015 by . Please don't steal my stuff.</p>
+            </div>
+            <div class="grid_3">
+              <div class="media">
+                <div style="float: left"><a class="twitter" href="http://twitter.com/snare"></a></div>
+                <div style="float: left"><a class="rss" href="/feed.xml"></a></div>
+              </div>
+            </div>
+        </div>
+      </div>
+    </div>
+  <script type="text/javascript">
+
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-29183428-1']);
+  _gaq.push(['_trackPageview']);
+
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+
+  </script>
+  <img src="/img/twitter_active.png" style="display: none" />
+  <img src="/img/rss_active.png" style="display: none" />
+  </body>
+</html>

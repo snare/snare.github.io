@@ -1,0 +1,887 @@
+<!DOCTYPE HTML>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>ho.ax - </title>
+    <link rel="stylesheet" type="text/css" href="/css/reset.css" media="screen">
+    <link rel="stylesheet" type="text/css" href="/css/grid.css" media="screen">
+    <link rel="stylesheet" type="text/css" href="/css/style.css" media="screen">
+    <link rel="stylesheet" type="text/css" href="/css/highlight.css" media="screen">
+    <link rel="alternate" type="application/rss+xml" title="RSS" href="http://ho.ax/feed.xml">
+  </head>
+  <body>
+      <div id="container">
+        <div id="header">
+          <div class="container_12">
+            <div class="grid_6">
+              <h1><a href="/">ho/ax.</a></h1>
+            </div>
+            <div class="grid_6">
+              <div class="media">
+                <div style="float: left"><a class="twitter" href="http://twitter.com/snare"></a></div>
+                <div style="float: left"><a class="rss" href="/feed.xml"></a></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div id="splitbar">&nbsp;</div>
+        <div id="main">
+          <div class="container_12">
+            <div class="grid_9">
+              <div id="content">
+                
+  <h1><a href="/posts/2012/02/resolving-kernel-symbols/">Resolving kernel symbols</a></h1>
+<p class="metadata">
+	Posted by snare on 25 February 2012. Tags: <a class="tag" href="/tag/mac os x/" rel="tag">mac os x</a>, <a class="tag" href="/tag/kernel/" rel="tag">kernel</a>, <a class="tag" href="/tag/kexts/" rel="tag">kexts</a>, <a class="tag" href="/tag/rootkits/" rel="tag">rootkits</a>, <a class="tag" href="/tag/mach-o/" rel="tag">mach-o</a>
+</p>
+
+<p>KXLD doesn’t like us much. He has KPIs to meet and doesn’t have time to help out shifty rootkit developers. KPIs are Kernel Programming Interfaces - lists of symbols in the kernel that KXLD (the kernel extension linker) will allow kexts to be linked against. The KPIs on which your kext depends are specified in the <code>Info.plist</code> file like this:</p>
+
+<pre><code class="language-xml"><span class="nt">&lt;key&gt;</span>OSBundleLibraries<span class="nt">&lt;/key&gt;</span>
+<span class="nt">&lt;dict&gt;</span>
+	<span class="nt">&lt;key&gt;</span>com.apple.kpi.bsd<span class="nt">&lt;/key&gt;</span>
+	<span class="nt">&lt;string&gt;</span>11.0<span class="nt">&lt;/string&gt;</span>
+	<span class="nt">&lt;key&gt;</span>com.apple.kpi.libkern<span class="nt">&lt;/key&gt;</span>
+	<span class="nt">&lt;string&gt;</span>11.0<span class="nt">&lt;/string&gt;</span>
+	<span class="nt">&lt;key&gt;</span>com.apple.kpi.mach<span class="nt">&lt;/key&gt;</span>
+	<span class="nt">&lt;string&gt;</span>11.0<span class="nt">&lt;/string&gt;</span>
+	<span class="nt">&lt;key&gt;</span>com.apple.kpi.unsupported<span class="nt">&lt;/key&gt;</span>
+	<span class="nt">&lt;string&gt;</span>11.0<span class="nt">&lt;/string&gt;</span>
+	<span class="nt">&lt;key&gt;</span>com.apple.kpi.iokit<span class="nt">&lt;/key&gt;</span>
+	<span class="nt">&lt;string&gt;</span>11.0<span class="nt">&lt;/string&gt;</span>
+	<span class="nt">&lt;key&gt;</span>com.apple.kpi.dsep<span class="nt">&lt;/key&gt;</span>
+	<span class="nt">&lt;string&gt;</span>11.0<span class="nt">&lt;/string&gt;</span>
+<span class="nt">&lt;/dict&gt;</span></code></pre>
+
+<p>Those bundle identifiers correspond to the <code>CFBundleIdentifier</code> key specified in the <code>Info.plist</code> files for “plug-ins” to the <code>System.kext</code> kernel extension. Each KPI has its own plug-in kext - for example, the <code>com.apple.kpi.bsd</code> symbol table lives in <code>BSDKernel.kext</code>. These aren’t exactly complete kexts, they’re just Mach-O binaries with symbol tables full of undefined symbols (they really reside within the kernel image), which you can see if we dump the load commands:</p>
+
+<pre><code>$ otool -l /System/Library/Extensions/System.kext/PlugIns/BSDKernel.kext/BSDKernel 
+/System/Library/Extensions/System.kext/PlugIns/BSDKernel.kext/BSDKernel:
+Load command 0
+     cmd LC_SYMTAB
+ cmdsize 24
+  symoff 80
+   nsyms 830
+  stroff 13360
+ strsize 13324
+Load command 1
+     cmd LC_UUID
+ cmdsize 24
+    uuid B171D4B0-AC45-47FC-8098-5B2F89B474E6
+</code></pre>
+
+<p>That’s it - just the <code>LC_SYMTAB</code> (symbol table). So, how many symbols are there in the kernel image?</p>
+
+<pre><code>$ nm /mach_kernel|wc -l
+   16122
+</code></pre>
+
+<p>Surely all the symbols in all the KPI symbol tables add up to the same number, right?</p>
+
+<pre><code>$ find /System/Library/Extensions/System.kext/PlugIns -type f|grep -v plist|xargs nm|sort|uniq|wc -l
+    7677
+</code></pre>
+
+<p>Nope. Apple doesn’t want us to play with a whole bunch of their toys. 8445 of them. Some of them are pretty fun too :( Like <code>allproc</code>:</p>
+
+<pre><code>$ nm /mach_kernel|grep allproc
+ffffff80008d9e40 S _allproc
+$ find /System/Library/Extensions/System.kext/PlugIns -type f|grep -v plist|xargs nm|sort|uniq|grep allproc
+$ 
+</code></pre>
+
+<p>Damn. The <code>allproc</code> symbol is the head of the kernel’s list (the <code>queue(3)</code> kind of list) of running processes. It’s what gets queried when you run <code>ps(1)</code> or <code>top(1)</code>. Why do we want to find <code>allproc</code>? If we want to hide processes in a kernel rootkit that’s the best place to start. So, what happens if we build a kernel extension that imports <code>allproc</code> and try to load it?</p>
+
+<pre><code>bash-3.2# kextload AllProcRocks.kext
+/Users/admin/AllProcRocks.kext failed to load - (libkern/kext) link error; check the system/kernel logs for errors or try kextutil(8).
+</code></pre>
+
+<p>Console says:</p>
+
+<pre><code>25/02/12 6:30:47.000 PM kernel: kxld[ax.ho.kext.AllProcRocks]: The following symbols are unresolved for this kext:
+25/02/12 6:30:47.000 PM kernel: kxld[ax.ho.kext.AllProcRocks]: 	_allproc
+</code></pre>
+
+<p>OK, whatever.</p>
+
+<h2 id="what-do-we-do">What do we do?</h2>
+
+<p>There are a few steps that we need to take in order to resolve symbols in the kernel (or any other Mach-O binary):</p>
+
+<ul>
+  <li>Find the <code>__LINKEDIT</code> segment - this contains an array of <code>struct nlist_64</code>’s which represent all the symbols in the symbol table, and an array of symbol name strings.</li>
+  <li>Find the <code>LC_SYMTAB</code> load command - this contains the offsets within the file of the symbol and string tables.</li>
+  <li>Calculate the position of the string table within <code>__LINKEDIT</code> based on the offsets in the <code>LC_SYMTAB</code> load command.</li>
+  <li>Iterate through the <code>struct nlist_64</code>’s in <code>__LINKEDIT</code>, comparing the corresponding string in the string table to the name of the symbol we’re looking for until we find it (or reach the end of the symbol table).</li>
+  <li>Grab the address of the symbol from the <code>struct nlist_64</code> we’ve found.</li>
+</ul>
+
+<h2 id="parse-the-load-commands">Parse the load commands</h2>
+
+<p>One easy way to look at the symbol table would be to read the kernel file on disk at <code>/mach_kernel</code>, but we can do better than that if we’re already in the kernel - the kernel image is loaded into memory at a known address. If we have a look at the load commands for the kernel binary:</p>
+
+<pre><code>$ otool -l /mach_kernel
+/mach_kernel:
+Load command 0
+      cmd LC_SEGMENT_64
+  cmdsize 472
+  segname __TEXT
+   vmaddr 0xffffff8000200000
+   vmsize 0x000000000052f000
+  fileoff 0
+ filesize 5435392
+  maxprot 0x00000007
+ initprot 0x00000005
+   nsects 5
+    flags 0x0
+&lt;snip&gt;
+</code></pre>
+
+<p>We can see that the <code>vmaddr</code> field of the first segment is <code>0xffffff8000200000</code>. If we fire up GDB and point it at a VM running Mac OS X (as per my previous posts <a href="/posts/2012/02/debugging-the-mac-os-x-kernel-with-vmware-and-gdb/">here</a> and <a href="/posts/2012/02/vmware-hardware-debugging/">here</a>), we can see the start of the Mach-O header in memory at this address:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">x</span>/<span class="kc">xw</span> <span class="mh">0xffffff8000200000</span>
+<span class="mh">0xffffff8000200000</span>:	<span class="mh">0xfeedfacf</span></code></pre>
+
+<p><code>0xfeedfacf</code> is the magic number denoting a 64-bit Mach-O image (the 32-bit version is <code>0xfeedface</code>). We can actually display this as a struct if we’re using the DEBUG kernel with all the DWARF info:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">print</span> *(<span class="kt">struct mach_header_64 *</span>)<span class="mh">0xffffff8000200000</span>
+<span class="nv">$1</span> = {
+  <span class="nv">magic</span> = <span class="mh">0xfeedfacf</span>, 
+  <span class="nv">cputype</span> = <span class="mh">0x1000007</span>, 
+  <span class="nv">cpusubtype</span> = <span class="mh">0x3</span>, 
+  <span class="nv">filetype</span> = <span class="mh">0x2</span>, 
+  <span class="nv">ncmds</span> = <span class="mh">0x12</span>, 
+  <span class="nv">sizeofcmds</span> = <span class="mh">0x1010</span>, 
+  <span class="nv">flags</span> = <span class="mh">0x1</span>, 
+  <span class="nv">reserved</span> = <span class="mh">0x0</span>
+}</code></pre>
+
+<p>The <code>mach_header</code> and <code>mach_header_64</code> structs (along with the other Mach-O-related structs mentioned in this post) are documented in the <a href="https://developer.apple.com/library/mac/#documentation/developertools/conceptual/MachORuntime/Reference/reference.html">Mach-O File Format Reference</a>, but we aren’t particularly interested in the header at the moment. I recommend having a look at the kernel image with <a href="http://sourceforge.net/projects/machoview/">MachOView</a> to get the gist of where everything is and how it’s laid out.</p>
+
+<p>Directly following the Mach-O header is the first load command:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">set</span> <span class="nv">$mh</span><span class="o">=</span>(<span class="kt">struct mach_header_64 *</span>)<span class="mh">0xffffff8000200000</span>
+<span class="kt">gdb$</span> <span class="nb">print</span> *(<span class="kt">struct load_command*</span>)((void *)<span class="nv">$mh</span> + sizeof(struct mach_header_<span class="mh">64</span>))
+<span class="nv">$6</span> = {
+  <span class="nv">cmd</span> = <span class="mh">0x19</span>, 
+  <span class="nv">cmdsize</span> = <span class="mh">0x1d8</span>
+}</code></pre>
+
+<p>This is the load command for the first <code>__TEXT</code> segment we saw with <code>otool</code>. We can cast it as a <code>segment_command_64</code> in GDB and have a look:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">set</span> <span class="nv">$lc</span><span class="o">=</span>((void *)<span class="nv">$mh</span> + sizeof(struct mach_header_<span class="mh">64</span>))
+<span class="kt">gdb$</span> <span class="nb">print</span> *(<span class="kt">struct segment_command_64 *</span>)<span class="nv">$lc</span>
+<span class="nv">$7</span> = {
+  <span class="nv">cmd</span> = <span class="mh">0x19</span>, 
+  <span class="nv">cmdsize</span> = <span class="mh">0x1d8</span>, 
+  <span class="nv">segname</span> = <span class="s">"__TEXT\000\000\000\000\000\000\000\000\000"</span>, 
+  <span class="nv">vmaddr</span> = <span class="mh">0xffffff8000200000</span>, 
+  <span class="nv">vmsize</span> = <span class="mh">0x8c8000</span>, 
+  <span class="nv">fileoff</span> = <span class="mh">0x0</span>, 
+  <span class="nv">filesize</span> = <span class="mh">0x8c8000</span>, 
+  <span class="nv">maxprot</span> = <span class="mh">0x7</span>, 
+  <span class="nv">initprot</span> = <span class="mh">0x5</span>, 
+  <span class="nv">nsects</span> = <span class="mh">0x5</span>, 
+  <span class="nv">flags</span> = <span class="mh">0x0</span>
+}</code></pre>
+
+<p>This isn’t the load command we are looking for, so we have to iterate through all of them until we come across a segment with <code>cmd</code> of <code>0x19</code> (<code>LC_SEGMENT_64</code>) and <code>segname</code> of <code>__LINKEDIT</code>. In the debug kernel, this happens to be located at <code>0xffffff8000200e68</code>:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">set</span> <span class="nv">$lc</span><span class="o">=</span><span class="mh">0xffffff8000200e68</span>
+<span class="kt">gdb$</span> <span class="nb">print</span> *(<span class="kt">struct load_command*</span>)<span class="nv">$lc</span>   
+<span class="nv">$14</span> = {
+  <span class="nv">cmd</span> = <span class="mh">0x19</span>, 
+  <span class="nv">cmdsize</span> = <span class="mh">0x48</span>
+}
+<span class="kt">gdb$</span> <span class="nb">print</span> *(<span class="kt">struct segment_command_64*</span>)<span class="nv">$lc</span>
+<span class="nv">$16</span> = {
+  <span class="nv">cmd</span> = <span class="mh">0x19</span>, 
+  <span class="nv">cmdsize</span> = <span class="mh">0x48</span>, 
+  <span class="nv">segname</span> = <span class="s">"__LINKEDIT\000\000\000\000\000"</span>, 
+  <span class="nv">vmaddr</span> = <span class="mh">0xffffff8000d08000</span>, 
+  <span class="nv">vmsize</span> = <span class="mh">0x109468</span>, 
+  <span class="nv">fileoff</span> = <span class="mh">0xaf4698</span>, 
+  <span class="nv">filesize</span> = <span class="mh">0x109468</span>, 
+  <span class="nv">maxprot</span> = <span class="mh">0x7</span>, 
+  <span class="nv">initprot</span> = <span class="mh">0x1</span>, 
+  <span class="nv">nsects</span> = <span class="mh">0x0</span>, 
+  <span class="nv">flags</span> = <span class="mh">0x0</span>
+}</code></pre>
+
+<p>Then we grab the <code>vmaddr</code> field from the load command, which specifies the address at which the <code>__LINKEDIT</code> segment’s data will be located:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">set</span> <span class="nv">$linkedit</span><span class="o">=</span>((<span class="kt">struct segment_command_64*</span>)<span class="nv">$lc</span>)<span class="na">-&gt;vmaddr</span>
+<span class="kt">gdb$</span> <span class="nb">print</span> <span class="nv">$linkedit</span>
+$<span class="mh">19</span> <span class="o">=</span> <span class="mh">0xffffff8000d08000</span>
+<span class="kt">gdb$</span> <span class="nb">print</span> *(<span class="kt">struct nlist_64 *</span>)<span class="nv">$linkedit</span>
+<span class="nv">$20</span> = {
+  <span class="nv">n_un</span> = {
+    <span class="nv">n_strx</span> = <span class="mh">0x68a29</span>
+  }, 
+  <span class="nv">n_type</span> = <span class="mh">0xe</span>, 
+  <span class="nv">n_sect</span> = <span class="mh">0x1</span>, 
+  <span class="nv">n_desc</span> = <span class="mh">0x0</span>, 
+  <span class="nv">n_value</span> = <span class="mh">0xffffff800020a870</span>
+}</code></pre>
+
+<p>And there’s the first <code>struct nlist_64</code>.</p>
+
+<p>As for the <code>LC_SYMTAB</code> load command, we just need to iterate through the load commands until we find one with the <code>cmd</code> field value of <code>0x02</code> (<code>LC_SYMTAB</code>). In this case, it’s located at <code>0xffffff8000200eb0</code>:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">set</span> <span class="nv">$symtab</span><span class="o">=</span>*(<span class="kt">struct symtab_command*</span>)<span class="mh">0xffffff8000200eb0</span>
+<span class="kt">gdb$</span> <span class="nb">print</span> <span class="nv">$symtab</span>
+<span class="nv">$23</span> = {
+  <span class="nv">cmd</span> = <span class="mh">0x2</span>, 
+  <span class="nv">cmdsize</span> = <span class="mh">0x18</span>, 
+  <span class="nv">symoff</span> = <span class="mh">0xaf4698</span>, 
+  <span class="nv">nsyms</span> = <span class="mh">0x699d</span>, 
+  <span class="nv">stroff</span> = <span class="mh">0xb5e068</span>, 
+  <span class="nv">strsize</span> = <span class="mh">0x9fa98</span>
+}</code></pre>
+
+<p>The useful parts here are the <code>symoff</code> field, which specifies the offset in the file to the symbol table (start of the <code>__LINKEDIT</code> segment), and the <code>stroff</code> field, which specifies the offset in the file to the string table (somewhere in the middle of the <code>__LINKEDIT</code> segment). Why, you ask, did we need to find the <code>__LINKEDIT</code> segment as well, since we have the offset here in the <code>LC_SYMTAB</code> command? If we were looking at the file on disk we wouldn’t have needed to, but as the kernel image we’re inspecting has already been loaded into memory, the binary segments have been loaded at the virtual memory addresses specified in their load commands. This means that the <code>symoff</code> and <code>stroff</code> fields are not correct any more. However, they’re still useful, as the difference between the two helps us figure out the offset into the <code>__LINKEDIT</code> segment at which the string table exists:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">print</span> <span class="nv">$linkedit</span>
+$<span class="mh">24</span> <span class="o">=</span> <span class="mh">0xffffff8000d08000</span>
+<span class="kt">gdb$</span> <span class="nb">print</span> <span class="nv">$linkedit</span> + (<span class="nv">$symtab</span><span class="na">-&gt;stroff</span> - <span class="nv">$symtab</span><span class="na">-&gt;symoff</span>)
+$<span class="mh">25</span> <span class="o">=</span> <span class="mh">0xffffff8000d719d0</span>
+<span class="kt">gdb$</span> <span class="nb">set</span> <span class="nv">$strtab</span><span class="o">=</span><span class="nv">$linkedit</span> + (<span class="nv">$symtab</span><span class="na">-&gt;stroff</span> - <span class="nv">$symtab</span><span class="na">-&gt;symoff</span>)
+<span class="kt">gdb$</span> <span class="nb">x</span>/<span class="mi">16</span><span class="kc">s</span> <span class="nv">$strtab</span>
+<span class="mh">0xffffff8000d719d0</span>:	 <span class="s">""</span>
+<span class="mh">0xffffff8000d719d1</span>:	 <span class="s">""</span>
+<span class="mh">0xffffff8000d719d2</span>:	 <span class="s">""</span>
+<span class="mh">0xffffff8000d719d3</span>:	 <span class="s">""</span>
+<span class="mh">0xffffff8000d719d4</span>:	 <span class="s">".constructors_used"</span>
+<span class="mh">0xffffff8000d719e7</span>:	 <span class="s">".destructors_used"</span>
+<span class="mh">0xffffff8000d719f9</span>:	 <span class="s">"_AddFileExtent"</span>
+<span class="mh">0xffffff8000d71a08</span>:	 <span class="s">"_AllocateNode"</span>
+<span class="mh">0xffffff8000d71a16</span>:	 <span class="s">"_Assert"</span>
+<span class="mh">0xffffff8000d71a1e</span>:	 <span class="s">"_BF_decrypt"</span>
+<span class="mh">0xffffff8000d71a2a</span>:	 <span class="s">"_BF_encrypt"</span>
+<span class="mh">0xffffff8000d71a36</span>:	 <span class="s">"_BF_set_key"</span>
+<span class="mh">0xffffff8000d71a42</span>:	 <span class="s">"_BTClosePath"</span>
+<span class="mh">0xffffff8000d71a4f</span>:	 <span class="s">"_BTDeleteRecord"</span>
+<span class="mh">0xffffff8000d71a5f</span>:	 <span class="s">"_BTFlushPath"</span>
+<span class="mh">0xffffff8000d71a6c</span>:	 <span class="s">"_BTGetInformation"</span></code></pre>
+
+<h2 id="actually-finding-some-symbols">Actually finding some symbols</h2>
+
+<p>Now that we know where the symbol table and string table live, we can get on to the srs bznz. So, let’s find that damn <code>_allproc</code> symbol we need. Have a look at that first <code>struct nlist_64</code> again:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">print</span> *(<span class="kt">struct nlist_64 *</span>)<span class="nv">$linkedit</span>
+<span class="nv">$28</span> = {
+  <span class="nv">n_un</span> = {
+    <span class="nv">n_strx</span> = <span class="mh">0x68a29</span>
+  }, 
+  <span class="nv">n_type</span> = <span class="mh">0xe</span>, 
+  <span class="nv">n_sect</span> = <span class="mh">0x1</span>, 
+  <span class="nv">n_desc</span> = <span class="mh">0x0</span>, 
+  <span class="nv">n_value</span> = <span class="mh">0xffffff800020a870</span>
+}</code></pre>
+
+<p>The <code>n_un.nstrx</code> field there specifies the offset into the string table at which the string corresponding to this symbol exists. If we add that offset to the address at which the string table starts, we’ll see the symbol name:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">x</span>/<span class="kc">s</span> <span class="nv">$strtab</span> + ((<span class="kt">struct nlist_64 *</span>)<span class="nv">$linkedit</span>)<span class="na">-&gt;n_un.n_strx</span>
+<span class="mh">0xffffff8000dda3f9</span>:	 <span class="s">"_ps_vnode_trim_init"</span></code></pre>
+
+<p>Now all we need to do is iterate through all the <code>struct nlist_64</code>’s until we find the one with the matching name. In this case it’s at <code>0xffffff8000d482a0</code>:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">set</span> <span class="nv">$nlist</span><span class="o">=</span><span class="mh">0xffffff8000d482a0</span>
+<span class="kt">gdb$</span> <span class="nb">print</span> *(<span class="kt">struct nlist_64*</span>)<span class="nv">$nlist</span>
+<span class="nv">$31</span> = {
+  <span class="nv">n_un</span> = {
+    <span class="nv">n_strx</span> = <span class="mh">0x35a07</span>
+  }, 
+  <span class="nv">n_type</span> = <span class="mh">0xf</span>, 
+  <span class="nv">n_sect</span> = <span class="mh">0xb</span>, 
+  <span class="nv">n_desc</span> = <span class="mh">0x0</span>, 
+  <span class="nv">n_value</span> = <span class="mh">0xffffff8000cb5ca0</span>
+}
+<span class="kt">gdb$</span> <span class="nb">x</span>/<span class="kc">s</span> <span class="nv">$strtab</span> + ((<span class="kt">struct nlist_64 *</span>)<span class="nv">$nlist</span>)<span class="na">-&gt;n_un.n_strx</span>
+<span class="mh">0xffffff8000da73d7</span>:	 <span class="s">"_allproc"</span></code></pre>
+
+<p>The <code>n_value</code> field there (<code>0xffffff8000cb5ca0</code>) is the virtual memory address at which the symbol’s data/code exists. <code>_allproc</code> is not a great example as it’s a piece of data, rather than a function, so let’s try it with a function:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">set</span> <span class="nv">$nlist</span><span class="o">=</span><span class="mh">0xffffff8000d618f0</span>
+<span class="kt">gdb$</span> <span class="nb">print</span> *(<span class="kt">struct nlist_64*</span>)<span class="nv">$nlist</span>
+<span class="nv">$32</span> = {
+  <span class="nv">n_un</span> = {
+    <span class="nv">n_strx</span> = <span class="mh">0x52ed3</span>
+  }, 
+  <span class="nv">n_type</span> = <span class="mh">0xf</span>, 
+  <span class="nv">n_sect</span> = <span class="mh">0x1</span>, 
+  <span class="nv">n_desc</span> = <span class="mh">0x0</span>, 
+  <span class="nv">n_value</span> = <span class="mh">0xffffff80007cceb0</span>
+}
+<span class="kt">gdb$</span> <span class="nb">x</span>/<span class="kc">s</span> <span class="nv">$strtab</span> + ((<span class="kt">struct nlist_64 *</span>)<span class="nv">$nlist</span>)<span class="na">-&gt;n_un.n_strx</span>
+<span class="mh">0xffffff8000dc48a3</span>:	 <span class="s">"_proc_lock"</span></code></pre>
+
+<p>If we disassemble a few instructions at that address:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">x</span>/<span class="mi">12</span><span class="kc">i</span> <span class="mh">0xffffff80007cceb0</span>
+<span class="mh">0xffffff80007cceb0</span> <span class="nf">&lt;proc_lock&gt;</span>:	push   rbp
+<span class="mh">0xffffff80007cceb1</span> <span class="nf">&lt;proc_lock+1&gt;</span>:	mov    rbp,rsp
+<span class="mh">0xffffff80007cceb4</span> <span class="nf">&lt;proc_lock+4&gt;</span>:	sub    rsp,<span class="mh">0x10</span>
+<span class="mh">0xffffff80007cceb8</span> <span class="nf">&lt;proc_lock+8&gt;</span>:	mov    QWORD PTR [rbp-<span class="mh">0x8</span>],rdi
+<span class="mh">0xffffff80007ccebc</span> <span class="nf">&lt;proc_lock+12&gt;</span>:	mov    rax,QWORD PTR [rbp-<span class="mh">0x8</span>]
+<span class="mh">0xffffff80007ccec0</span> <span class="nf">&lt;proc_lock+16&gt;</span>:	mov    rcx,<span class="mh">0x50</span>
+<span class="mh">0xffffff80007cceca</span> <span class="nf">&lt;proc_lock+26&gt;</span>:	add    rax,rcx
+<span class="mh">0xffffff80007ccecd</span> <span class="nf">&lt;proc_lock+29&gt;</span>:	mov    rdi,rax
+<span class="mh">0xffffff80007cced0</span> <span class="nf">&lt;proc_lock+32&gt;</span>:	call   <span class="mh">0xffffff800035d270</span> <span class="nf">&lt;lck_mtx_lock&gt;</span>
+<span class="mh">0xffffff80007cced5</span> <span class="nf">&lt;proc_lock+37&gt;</span>:	add    rsp,<span class="mh">0x10</span>
+<span class="mh">0xffffff80007cced9</span> <span class="nf">&lt;proc_lock+41&gt;</span>:	pop    rbp
+<span class="mh">0xffffff80007cceda</span> <span class="nf">&lt;proc_lock+42&gt;</span>:	ret</code></pre>
+
+<p>We can see that GDB has resolved the symbol for us, and we’re right on the money.</p>
+
+<h2 id="sample-code">Sample code</h2>
+
+<p>I’ve posted an example kernel extension on <a href="https://github.com/snarez/KernelResolver">github</a> to check out. When we load it with <code>kextload KernelResolver.kext</code>, we should see something like this on the console:</p>
+
+<pre><code>25/02/12 8:06:49.000 PM kernel: [+] _allproc @ 0xffffff8000cb5ca0
+25/02/12 8:06:49.000 PM kernel: [+] _proc_lock @ 0xffffff80007cceb0
+25/02/12 8:06:49.000 PM kernel: [+] _kauth_cred_setuidgid @ 0xffffff80007abbb0
+25/02/12 8:06:49.000 PM kernel: [+] __ZN6OSKext13loadFromMkextEjPcjPS0_Pj @ 0xffffff80008f8606
+</code></pre>
+
+<p><strong>Update</strong>: It was brought to my attention that I was using a debug kernel in these examples. Just to be clear - the method described in this post, as well as the sample code, works on a non-debug, default install &gt;=10.7.0 (xnu-1699.22.73) kernel as well, but the GDB inspection probably won’t (unless you load up the struct definitions etc, as they are all stored in the DEBUG kernel). The debug kernel contains every symbol from the source, whereas many symbols are stripped from the distribution kernel (e.g. <code>sLoadedKexts</code>). Previously (before 10.7), the kernel would write out the symbol table to a file on disk and jettison it from memory altogether. I suppose when kernel extensions were loaded, <code>kextd</code> or <code>kextload</code> would resolve symbols from within that on-disk symbol table or from the on-disk kernel image. These days the symbol table memory is just marked as pageable, so it can potentially get paged out if the system is short of memory.</p>
+
+<p>I hope somebody finds this useful. Shoot me an email or get at me on twitter if you have any questions. I’ll probably sort out comments for this blog at some point, but I cbf at the moment.</p>
+
+
+  
+	<hr/>
+  
+
+  <h1><a href="/posts/2012/02/vmware-hardware-debugging/">VMware debugging II&#58; "Hardware" debugging</a></h1>
+<p class="metadata">
+	Posted by snare on 18 February 2012. Tags: <a class="tag" href="/tag/mac os x/" rel="tag">mac os x</a>, <a class="tag" href="/tag/kernel/" rel="tag">kernel</a>, <a class="tag" href="/tag/debugging/" rel="tag">debugging</a>, <a class="tag" href="/tag/vmware/" rel="tag">vmware</a>, <a class="tag" href="/tag/efi/" rel="tag">efi</a>, <a class="tag" href="/tag/gdb/" rel="tag">gdb</a>
+</p>
+
+<p>A few days ago I wrote an <a href="/posts/2012/02/debugging-the-mac-os-x-kernel-with-vmware-and-gdb/">article</a> about debugging the OS X kernel with VMware and GDB, using Apple’s Kernel Debugger Protocol (KDP). There is another method of debugging XNU that is worth mentioning - VMware Fusion’s built in debug server. This is the virtual equivalent of a hardware debugger on a physical machine. According to a VMware engineer:</p>
+
+<blockquote>
+  <p>… when you stop execution, all cores are halted, the guest doesn’t even know that time has stopped, and you can happily single-step interrupt handlers, exceptions, etc.</p>
+</blockquote>
+
+<p>This is pretty awesome, and has a few advantages over KDP:</p>
+
+<ul>
+  <li>It’s easier to break into the debugger - you can use the normal <code>^C</code> method from the GDB session, rather than having to either insert <code>int 3</code>’s into your code or insert breakpoints on predictable function calls like <code>kext_alloc()</code> when you attach the debugger at boot time.</li>
+  <li>It’s faster - KDP works over UDP and seems to have a few timing issues where it drops packets or the target kernel doesn’t respond in time (particularly in the more complex <code>kgmacros</code> commands), whereas the VMware debug stub seems to be substantially faster and (so far) more reliable.</li>
+  <li>You can debug anything from the time the VM is powered on - this means that you can debug non-<code>DEBUG</code> XNU kernels, along with EFI stuff, the bootloader (<code>boot.efi</code>), whatever you want.</li>
+</ul>
+
+<h2 id="vmware-setup">VMware setup</h2>
+
+<p>Getting this going is pretty easy, it just requires a couple of config options to be added to the <code>.vmx</code> file for your virtual machine. For example, if you have a VM called <em>Lion.vmwarevm</em> there’ll be a file inside called <em>Lion.vmx</em> which contains the configuration for the VM. Add the following lines (while the VM is not running):</p>
+
+<pre><code>debugStub.listen.guest32 = "TRUE"
+debugStub.listen.guest64 = "TRUE"
+</code></pre>
+
+<p>The debug stub listens on the loopback interface on the Mac OS X host OS on which Fusion is running. If you want to debug from another machine (or VM) you need to enable the ‘remote’ listener in the <code>.vmx</code> file instead of (or as well as) the local listener:</p>
+
+<pre><code>debugStub.listen.guest32.remote = "TRUE"
+debugStub.listen.guest64.remote = "TRUE"
+</code></pre>
+
+<p>Using this method you can connect to the debug stub from an instance of the FSF version of GDB on a Linux box.</p>
+
+<p>That’s it, start up the VM. If you’re using a VM with a <code>DEBUG</code> kernel and you’ve set the <code>boot-args</code> variable in NVRAM to contain <code>debug=0x1</code>, as per the <a href="/posts/2012/02/debugging-the-mac-os-x-kernel-with-vmware-and-gdb/">previous article</a>, you will need to attach another instance of GDB via KDP at this point and <code>continue</code> in that instance to let the boot process finish.</p>
+
+<h2 id="gdb">GDB</h2>
+
+<p>I’ve found that if you try to connect to the debug stub without loading a file to debug you get errors like this:</p>
+
+<pre><code class="language-gdb">[New thread <span class="mh">1</span>]
+Remote register badly formatted: T<span class="mh">05</span>thread:<span class="mh">00000001</span>;<span class="mh">06</span>:<span class="mh">10</span>d<span class="mh">3</span>fc<span class="mh">7</span>f<span class="mh">00000000</span>;<span class="mh">07</span>:c<span class="mh">0</span>d<span class="mh">2</span>fc<span class="mh">7</span>f<span class="mh">00000000</span>;<span class="mh">10</span>:<span class="mh">8</span>a<span class="mh">18</span>a<span class="mh">07</span>d<span class="mh">00000000</span>;
+here: <span class="mh">0000000</span>;<span class="mh">07</span>:c<span class="mh">0</span>d<span class="mh">2</span>fc<span class="mh">7</span>f<span class="mh">00000000</span>;<span class="mh">10</span>:<span class="mh">8</span>a<span class="mh">18</span>a<span class="mh">07</span>d<span class="mh">00000000</span>;</code></pre>
+
+<p>So start up GDB with whatever you’re intending to debug. In this example, the <code>DEBUG</code> kernel that is installed on the VM:</p>
+
+<pre><code class="language-gdb">$ gdb /Volumes/KernelDebugKit/DEBUG_Kernel/mach_kernel</code></pre>
+
+<p>If you’re debugging a 32-bit VM on a 64-bit machine, you’ll need to set the architecture:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">set</span> architecture i<span class="mh">386</span></code></pre>
+
+<p>Or, if you are debugging 64-bit on 64-bit and have trouble connecting to the debug stub, you may need to explicitly set it to 64-bit:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">set</span> architecture i<span class="mh">386</span>:x<span class="mh">86</span>-<span class="mh">64</span></code></pre>
+
+<p>If you’re debugging a 64-bit VM, connect to the 64-bit debug stub:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">target</span> remote localhost:<span class="mh">8864</span></code></pre>
+
+<p>Or the 32-bit debug stub for a 32-bit VM:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">target</span> remote localhost:<span class="mh">8832</span></code></pre>
+
+<p>At this point you should be connected to the debug stub, and the VM should be paused. You’ll see a dark translucent version of the ‘play’ button used to start the VM on the VM console (indicating the VM is paused and the debugger has control), and something like this in GDB:</p>
+
+<pre><code class="language-gdb">[New thread <span class="mh">1</span>]
+warning: Error <span class="mh">268435459</span> getting port names from mach_port_names
+[Switching to process <span class="mh">1</span> thread <span class="mh">0x0</span>]
+<span class="mh">0xffffff80008bf4c2</span> in tweak_crypt_group ()
+gdb$</code></pre>
+
+<p><code>tweak_crypt_group()</code> - heh. My VM is encrypting its disk at the moment.</p>
+
+<p>Now you’re in familiar territory:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">source</span> /Volumes/KernelDebugKit/kgmacros 
+Loading Kernel GDB Macros package.  Type <span class="s">"help kgm"</span> for more info.
+<span class="kt">gdb$</span> <span class="nb">bt</span>
+#<span class="mh">0</span>  <span class="mh">0xffffff7f817315b4</span> in ?? ()
+#<span class="mh">1</span>  <span class="mh">0xffffff7f8172343e</span> in ?? ()
+#<span class="mh">2</span>  <span class="mh">0xffffff7f81724f68</span> in ?? ()
+#<span class="mh">3</span>  <span class="mh">0xffffff8000379b18</span> in machine_idle () at pmCPU.c:<span class="mh">107</span>
+#<span class="mh">4</span>  <span class="mh">0xffffff800025c357</span> in processor_idle (thread<span class="o">=</span><span class="mh">0xffffff8008712b80</span>, processor<span class="o">=</span><span class="mh">0xffffff8000c9be20</span>) at sched_prim.c:<span class="mh">3928</span>
+#<span class="mh">5</span>  <span class="mh">0xffffff8000257060</span> in thread_select_idle (thread<span class="o">=</span><span class="mh">0xffffff8008712b80</span>, processor<span class="o">=</span><span class="mh">0xffffff8000c9be20</span>) at sched_prim.c:<span class="mh">1793</span>
+#<span class="mh">6</span>  <span class="mh">0xffffff8000256d8e</span> in thread_select (thread<span class="o">=</span><span class="mh">0xffffff8008712b80</span>, processor<span class="o">=</span><span class="mh">0xffffff8000c9be20</span>) at sched_prim.c:<span class="mh">1728</span>
+#<span class="mh">7</span>  <span class="mh">0xffffff8000258bbf</span> in thread_block_reason (continuation<span class="o">=</span><span class="mh">0xffffff8000227270</span> <span class="nf">&lt;ipc_mqueue_receive_continue&gt;</span>, parameter<span class="o">=</span><span class="mh">0x0</span>, reason<span class="o">=</span><span class="mh">0x0</span>) at sched_prim.c:<span class="mh">2396</span>
+#<span class="mh">8</span>  <span class="mh">0xffffff8000258cbc</span> in thread_block (continuation<span class="o">=</span><span class="mh">0xffffff8000227270</span> <span class="nf">&lt;ipc_mqueue_receive_continue&gt;</span>) at sched_prim.c:<span class="mh">2415</span>
+#<span class="mh">9</span>  <span class="mh">0xffffff8000227357</span> in ipc_mqueue_receive (mqueue<span class="o">=</span><span class="mh">0xffffff8008854728</span>, option<span class="o">=</span><span class="mh">0x7000006</span>, max_size<span class="o">=</span><span class="mh">0xc00</span>, rcv_timeout<span class="o">=</span><span class="mh">0xffffffff</span>, interruptible<span class="o">=</span><span class="mh">0x2</span>) at ipc_mqueue.c:<span class="mh">698</span>
+#<span class="mh">10</span> <span class="mh">0xffffff8000237542</span> in mach_msg_overwrite_trap (args<span class="o">=</span><span class="mh">0xffffff800872b804</span>) at mach_msg.c:<span class="mh">528</span>
+#<span class="mh">11</span> <span class="mh">0xffffff80002375b4</span> in mach_msg_trap (args<span class="o">=</span><span class="mh">0xffffff800872b804</span>) at mach_msg.c:<span class="mh">554</span>
+#<span class="mh">12</span> <span class="mh">0xffffff8000354a01</span> in mach_call_munger<span class="mh">64</span> (state<span class="o">=</span><span class="mh">0xffffff800872b800</span>) at bsd_i<span class="mh">386</span>.c:<span class="mh">534</span>
+<span class="kt">gdb$</span> <span class="nb">showalltasks</span>
+task                vm_map              ipc_space          #acts   pid  process             io_policy    wq_state   command
+<span class="mh">0xffffff80067ac938</span>  <span class="mh">0xffffff800249ee98</span>  <span class="mh">0xffffff80066ebdb0</span>    <span class="mh">60</span>     <span class="mh">0</span>  <span class="mh">0xffffff8000cb4c20</span>                          kernel_task
+<span class="mh">0xffffff80067ac5a0</span>  <span class="mh">0xffffff800249e200</span>  <span class="mh">0xffffff80066ebd10</span>     <span class="mh">3</span>     <span class="mh">1</span>  <span class="mh">0xffffff8007576820</span>                          launchd
+<span class="mh">0xffffff80067ac208</span>  <span class="mh">0xffffff800249e010</span>  <span class="mh">0xffffff80066ebc70</span>     <span class="mh">1</span>     <span class="mh">2</span>  <span class="mh">0xffffff80075763d0</span>                          launchctl
+<span class="mh">0xffffff80067ab740</span>  <span class="mh">0xffffff800249e108</span>  <span class="mh">0xffffff80066eba90</span>     <span class="mh">3</span>    <span class="mh">10</span>  <span class="mh">0xffffff80075756e0</span>                <span class="mh">2</span>  <span class="mh">1</span>  <span class="mh">0</span>   kextd
+<span class="mh">0xffffff80067abe70</span>  <span class="mh">0xffffff8007003568</span>  <span class="mh">0xffffff80066ebbd0</span>     <span class="mh">3</span>    <span class="mh">11</span>  <span class="mh">0xffffff8007575f80</span>                <span class="mh">1</span>  <span class="mh">0</span>  <span class="mh">0</span>   UserEventAgent
+<span class="mh">0xffffff80067abad8</span>  <span class="mh">0xffffff8007e692f8</span>  <span class="mh">0xffffff80066ebb30</span>     <span class="mh">3</span>    <span class="mh">12</span>  <span class="mh">0xffffff8007575b30</span>                <span class="mh">1</span>  <span class="mh">0</span>  <span class="mh">0</span>   mDNSResponder
+<span class="cs">&lt;snip&gt;</span></code></pre>
+
+<p>Don’t forget you can just <code>^C</code> to drop back into the debuggger just like back in the good old userland days:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">c</span>
+^C
+Program received signal SIGINT, Interrupt.
+<span class="mh">0xffffff7f817315b4</span> in ?? ()
+<span class="kt">gdb$</span> <span class="nb">bt</span>
+#<span class="mh">0</span>  <span class="mh">0xffffff7f817315b4</span> in ?? ()
+#<span class="mh">1</span>  <span class="mh">0xffffff7f8172343e</span> in ?? ()
+#<span class="mh">2</span>  <span class="mh">0xffffff7f81724f68</span> in ?? ()
+#<span class="mh">3</span>  <span class="mh">0xffffff8000379b18</span> in machine_idle () at pmCPU.c:<span class="mh">107</span>
+#<span class="mh">4</span>  <span class="mh">0xffffff800025c357</span> in processor_idle (thread<span class="o">=</span><span class="mh">0xffffff8008712b80</span>, processor<span class="o">=</span><span class="mh">0xffffff8000c9be20</span>) at sched_prim.c:<span class="mh">3928</span>
+<span class="cs">&lt;snip&gt;</span></code></pre>
+
+<p>Enjoy.</p>
+
+  
+	<hr/>
+  
+
+  <h1><a href="/posts/2012/02/debugging-the-mac-os-x-kernel-with-vmware-and-gdb/">Debugging the Mac OS X kernel with VMware and GDB</a></h1>
+<p class="metadata">
+	Posted by snare on 14 February 2012. Tags: <a class="tag" href="/tag/mac os x/" rel="tag">mac os x</a>, <a class="tag" href="/tag/kernel/" rel="tag">kernel</a>, <a class="tag" href="/tag/debugging/" rel="tag">debugging</a>, <a class="tag" href="/tag/vmware/" rel="tag">vmware</a>, <a class="tag" href="/tag/gdb/" rel="tag">gdb</a>
+</p>
+
+<p><em>Edit 13 July 2013: I’ve made a couple of updates to this post to clarify a couple of things and resolve issues people have had.</em></p>
+
+<p><em>fG! did a great write up <a href="http://reverse.put.as/2009/03/05/mac-os-x-kernel-debugging-with-vmware/">here</a> on how to set up two-machine debugging with VMware on Leopard a couple of years ago, but as a few things have changed since then and I will probably refer to this topic in future posts I thought it was worth revisiting.</em></p>
+
+<p>Debugging kernel extensions can be a bit of a pain. <code>printf()</code>-debugging is the worst, and being in kernel-land, it might not be immediately obvious how to go about debugging your (or other people’s) code. Apple has long provided methods for <a href="https://developer.apple.com/library/mac/documentation/Darwin/Conceptual/KernelProgramming/build/build.html#//apple_ref/doc/uid/TP30000905-CH221-CIHBJCGC">kernel debugging</a> via the Kernel Debugger Protocol (KDP), along with <a href="https://developer.apple.com/library/mac/#documentation/Darwin/Conceptual/KernelProgramming/build/build.html%23//apple_ref/doc/uid/TP30000905-CH221-CIHDEDFH">ddb</a>, the in-kernel serial debugger. KDP is implemented in-kernel by an instance of <a href="https://developer.apple.com/library/mac/#documentation/Darwin/Reference/KernelIOKitFramework/IOKernelDebugger_h/Classes/IOKernelDebugger/index.html">IOKernelDebugger</a>, and allows you to connect to the debug stub from an instance of  <code>gdb</code> (Apple’s outdated fork only AFAIK) running on another machine connected via FireWire or Ethernet. <code>ddb</code> can be used to debug the running kernel from the target machine itself, but is pretty low-level and arcane. Apple suggests in the <a href="https://developer.apple.com/library/mac/#documentation/Darwin/Conceptual/KernelProgramming/build/build.html#//apple_ref/doc/uid/TP30000905-CH221-TPXREF111">Kernel Programming Guide</a> that you are better off using <code>gdb</code> for most tasks, so that’s what we’ll do.</p>
+
+<h2 id="enter-vmware">Enter VMware</h2>
+
+<p>We don’t really want to use two physical machines for debugging, because who the hell uses physical boxes these days when VMs will do the job? With the release of Mac OS X 10.7 (Lion), Apple changed the EULA to allow running virtualised instances of Lion on top of an instance running on bare metal. Prior to this, only the “server” version of Mac OS X was allowed to be virtualised, and VMware ‘prevented’ the client version from being installed through some hardcoded logic in <code>vmware-vmx</code> (which some sneaky hackers patched). VMware Fusion 4 introduced the ability to install Mac OS X 10.7 into a VM without any dodgy hacks, just by choosing the <em>Install Mac OS X Lion.app</em> bundle as the installation disc.</p>
+
+<p>So, the first step of the process is: install yourself a Mac OS X VM as per the <a href="http://kb.vmware.com/selfservice/microsites/search.do?language=en_US&amp;cmd=displayKC&amp;externalId=2005334">VMware documentation</a>.</p>
+
+<p><em>Edit 13 July 2013: Once you’re done it’s probably a good idea to take a snapshot of your VM in case there are problems installing the debug kernel. Generally it’s not a problem, but it’s annoying to roll back and much easier to use a VMware snapshot.</em></p>
+
+<h2 id="install-the-debug-kernel">Install the debug kernel</h2>
+
+<p>Once we’ve got our VM installed, we need to install the Kernel Debug Kit. This contains a version of the XNU kernel built with the <code>DEBUG</code> flag set, which includes the debug stubs for KDP and <code>ddb</code>, and a second <code>DEBUG</code> version with a full symbol table to load in GDB so we can use breakpoints on symbol names and not go insane. The debug kits used to live <a href="https://developer.apple.com/hardwaredrivers/download/kerneldebugkits.html">here</a>, but it seems Apple decided they only want ADC members to be able to access them, so now they’re <a href="https://developer.apple.com/downloads/index.action">here</a> (requires ADC login). Download the appropriate version for the target kernel you’re debugging in the VM (not necessarily the same as the kernel version on your host debugger machine). In this case I’m using <em>Kernel Debug Kit 10.7.3 build 11D50</em>. Copy this image up to the target VM, and install the debug kernel as per the instructions in the readme file:</p>
+
+<pre><code>macvm$ sudo -s
+macvm# cd /
+macvm# ditto /Volumes/KernelDebugKit/DEBUG_Kernel/System.kext /System/Library/Extensions/System.kext
+macvm# cp -r /Volumes/KernelDebugKit/DEBUG_Kernel/mach_kernel* /
+macvm# chown -R root:wheel /System/Library/Extensions/System.kext /mach_kernel*
+macvm# chmod -R g-w /System/Library/Extensions/System.kext /mach_kernel*
+macvm# touch /System/Library/Extensions
+macvm# shutdown -r now
+</code></pre>
+
+<p>Hopefully your VM has successfully booted with the debug kernel and no magic blue smoke has been let out.</p>
+
+<p><em>Edit 13 July 2013: If your VM has panicked at boot time make sure you’ve allocated at least 4GB of RAM to the VM or it will not boot on newer OS X versions.</em></p>
+
+<p>Next we need to set the kernel boot arguments to tell it to wait for a debugger connection at boot time. There are <a href="https://developer.apple.com/library/mac/#documentation/Darwin/Conceptual/KernelProgramming/build/build.html#//apple_ref/doc/uid/TP30000905-CH221-TPXREF111">other options</a> but, as fG! said previously, there isn’t an obvious way to generate an NMI within VMware (I haven’t really looked further into this - if there is I’d like to hear about it). In VMware Fusion 4, the proper NVRAM support means we can specify normal <code>boot-args</code> in NVRAM rather than the old <code>com.apple.Boot.plist</code>, by using the <code>nvram</code> utility on the target VM like this:</p>
+
+<pre><code>macvm# nvram boot-args="-v debug=0x1"
+</code></pre>
+
+<p>Now we’ll do a bit of config on the debug host, then reboot the VM.</p>
+
+<h2 id="debug-host-config">Debug host config</h2>
+
+<p>Traditionally, two-machine debugging would either use FireWire or Ethernet. We can simulate Ethernet with the VMware network bridging.</p>
+
+<p><em>Edit 13 July 2013: With newer versions of OS X (I’m not sure exactly when they introduced this but it definitely works on 10.8.4) you don’t actually need to do this static ARP trick any more. When the VM boots it will stop at “Waiting for remote debugger connection” after telling you its MAC and IP address. You should be able to skip the static ARP and just <code>kdp-reattach</code> (as below) directly to the IP address displayed here.</em></p>
+
+<p>Grab the MAC address and IP address of your VM:</p>
+
+<pre><code>macvm$ ifconfig en0
+en0: flags=8863&lt;UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST&gt; mtu 1500
+	options=2b&lt;RXCSUM,TXCSUM,VLAN_HWTAGGING,TSO4&gt;
+	ether 00:0c:29:d6:df:02 
+	inet6 fe80::20c:29ff:fed6:df02%en0 prefixlen 64 scopeid 0x4 
+	inet 10.0.0.15 netmask 0xffffff00 broadcast 10.0.0.255
+	media: autoselect (1000baseT &lt;full-duplex&gt;)
+	status: active
+</code></pre>
+
+<p>And back on your debug host, add a static ARP entry for the VM:</p>
+
+<pre><code>debughost# arp -s 10.0.0.15 0:c:29:d6:df:2
+debughost# arp 10.0.0.15
+macvm (10.0.0.15) at 0:c:29:d6:df:2 on en0 permanent [ethernet]
+</code></pre>
+
+<p>I also have an <code>/etc/hosts</code> entry for the VM, hence the hostname <code>macvm</code>.</p>
+
+<p>Now we should be able to reboot the VM and it will pause waiting for the debugger connection at the start of the boot process. It used to actually say <em>Waiting for debugger connection…</em> or something similar in previous kernel versions, but it seems to pause after <em>[PCI configuration begin]</em> on 10.7.</p>
+
+<h2 id="fire-up-gdb">Fire up GDB</h2>
+
+<p>Now it’s time to actually start GDB and connect to the KDP debug stub. Assuming you’ve just mounted the Kernel Debug Kit dmg file, the following paths should be correct. On the debug host machine:</p>
+
+<pre><code class="language-gdb">$ gdb /Volumes/KernelDebugKit/DEBUG_Kernel/mach_kernel
+GNU gdb <span class="mh">6</span>.<span class="mh">3</span>.<span class="mh">50</span>-<span class="mh">20050815</span> (Apple version gdb-<span class="mh">1708</span>) (Thu Nov  <span class="mh">3</span> <span class="mh">21</span>:<span class="mh">59</span>:<span class="mh">02</span> UTC <span class="mh">2011</span>)
+Copyright <span class="mh">2004</span> Free Software Foundation, Inc.
+GDB is free software, covered by the GNU General Public License, and you are
+welcome to change it and/or distribute copies of it under certain conditions.
+Type <span class="s">"show copying"</span> to see the conditions.
+There is absolutely no warranty for GDB.  Type <span class="s">"show warranty"</span> for details.
+This GDB was configured as <span class="s">"x86_64-apple-darwin"</span>...</code></pre>
+
+<p>This is contrary to the instructions in the readme file for the Kernel Debug Kit, which tells you to target <code>/Volumes/KernelDebugKit/mach_kernel</code> with <code>gdb</code>. I haven’t been able to get this kernel to work correctly - symbols are not looked up properly and lots of addresses seem to be wrong, resulting in the <code>kgmacros</code> stuff not working, and breakpoints being set at the wrong addresses. If you load the kernel in the <code>DEBUG_Kernel</code> directory it works OK.</p>
+
+<p>Next, source the <code>kgmacros</code> file - this contains a bunch of GDB macros that make dealing with kernel introspection and debugging much easier (particularly when you want to start looking at stuff like the virtual memory subsystem, and other fun stuff):</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">source</span> /Volumes/KernelDebugKit/kgmacros 
+Loading Kernel GDB Macros package.  Type <span class="s">"help kgm"</span> for more info.</code></pre>
+
+<p>Note: if you’re attaching to a kernel running on a different arch (ie. you created a 32-bit VM on a 64-bit machine), you’ll need to use the <code>--arch</code> flag:</p>
+
+<blockquote>
+  <p>The –arch=i386 option allows you to use a system running the 64-bit kernel to connect to a target running the 32-bit kernel. The –arch=x86_64 option allows you to go the other direction.</p>
+</blockquote>
+
+<p>Now we attach to the debug target machine:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">kdp</span>-reattach <span class="mh">10</span>.<span class="mh">0</span>.<span class="mh">0</span>.<span class="mh">15</span>
+Connected.</code></pre>
+
+<p><em>Edit 13 July 2013: If you’re using a recent OS X you can <code>kdp-reattach</code> to the IP address that was printed when the debug kernel paused waiting for the debugger.</em></p>
+
+<p>You can also attach using <code>target remote-kdp</code> and <code>attach 10.0.0.15</code>. Allow the kernel to continue execution:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">c</span></code></pre>
+
+<p>At this point the disk icon in VMware should be going blue with activity, and the VM should continue booting as normal.</p>
+
+<h2 id="breaking-into-the-debugger">Breaking into the debugger</h2>
+
+<p>Unfortunately, we can’t use the normal method of hitting <code>^C</code> in the debugger to pause execution, so we have to rely on software breakpoints. The method fG! initially suggested was to break on <code>tcp_connect()</code> or something similar, so you can drop into the debugger by attempting to <code>telnet</code> somewhere. This proves to be a bit cumbersome in Lion with all the fancy (scary) network autodetect stuff - connections going out from agents all over the place means constantly dropping into the debugger.</p>
+
+<p>The method that I have primarily used is to set a breakpoint on the <code>kext_alloc()</code> function. This is called once during the initialisation of a kernel extension, so it can be a reasonably useful point at which to break if you want to debug the initialisation of the kext, and a good on-demand breakpoint for general kernel memory inspection.</p>
+
+<p><em>Edit 13 July 2013: @chicagoben pointed me at a simple method of replicating the behaviour of an NMI and dropping into the debugger using the technique in <a href="https://github.com/shiro-t/PseudoNMI">this handy kernel module</a>.</em></p>
+
+<p>Breaking on <code>kext_alloc()</code>:</p>
+
+<pre><code class="language-gdb">Breakpoint <span class="mh">1</span>, kext_alloc (_addr<span class="o">=</span><span class="mh">0xffffff804650b5f0</span>, size<span class="o">=</span><span class="mh">0x3000</span>, fixed<span class="o">=</span><span class="mh">0x0</span>) at kext_alloc.c:<span class="mh">107</span>
+<span class="mh">107</span>	in kext_alloc.c</code></pre>
+
+<p>And getting a stack trace:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">bt</span>
+#<span class="mh">0</span>  kext_alloc (_addr<span class="o">=</span><span class="mh">0xffffff804650b5f0</span>, size<span class="o">=</span><span class="mh">0x3000</span>, fixed<span class="o">=</span><span class="mh">0x0</span>) at kext_alloc.c:<span class="mh">107</span>
+#<span class="mh">1</span>  <span class="mh">0xffffff80008f4166</span> in kern_allocate (size<span class="o">=</span><span class="mh">0x3000</span>, flags<span class="o">=</span><span class="mh">0xffffff804650b664</span>, user_data<span class="o">=</span><span class="mh">0xffffff80096f9880</span>) at OSKext.cpp:<span class="mh">408</span>
+#<span class="mh">2</span>  <span class="mh">0xffffff8000922874</span> in allocate_kext (context<span class="o">=</span><span class="mh">0xffffff800af06420</span>, callback_data<span class="o">=</span><span class="mh">0xffffff80096f9880</span>, vmaddr_out<span class="o">=</span><span class="mh">0xffffff804650b710</span>, vmsize_out<span class="o">=</span><span class="mh">0xffffff804650b708</span>, linked_object_alloc_out<span class="o">=</span><span class="mh">0xffffff804650b6f8</span>) at kxld.c:<span class="mh">468</span>
+#<span class="mh">3</span>  <span class="mh">0xffffff8000921e69</span> in kxld_link_file (context<span class="o">=</span><span class="mh">0xffffff800af06420</span>, file<span class="o">=</span><span class="mh">0xffffff8036641000</span> <span class="s">"????\a"</span>, size<span class="o">=</span><span class="mh">0x2600</span>, name<span class="o">=</span><span class="mh">0xffffff8007e14a90</span> <span class="s">"ax.ho.kext.DebugTest"</span>, callback_data<span class="o">=</span><span class="mh">0xffffff80096f9880</span>, dependencies<span class="o">=</span><span class="mh">0xffffff80091e4a60</span>, ndependencies<span class="o">=</span><span class="mh">0x6</span>, linked_object_out<span class="o">=</span><span class="mh">0xffffff804650b8f8</span>, kmod_info_kern<span class="o">=</span><span class="mh">0xffffff80096f98c8</span>) at kxld.c:<span class="mh">273</span>
+#<span class="mh">4</span>  <span class="mh">0xffffff80008f0b55</span> in OSKext::loadExecutable (this<span class="o">=</span><span class="mh">0xffffff80096f9880</span>) at OSKext.cpp:<span class="mh">4751</span>
+#<span class="mh">5</span>  <span class="mh">0xffffff80008f3cc4</span> in OSKext::load (this<span class="o">=</span><span class="mh">0xffffff80096f9880</span>, startOpt<span class="o">=</span><span class="mh">0x0</span>, startMatchingOpt<span class="o">=</span><span class="mh">0x0</span>, personalityNames<span class="o">=</span><span class="mh">0x0</span>) at OSKext.cpp:<span class="mh">4420</span>
+#<span class="mh">6</span>  <span class="mh">0xffffff80008f741b</span> in OSKext::loadKextWithIdentifier (kextIdentifier<span class="o">=</span><span class="mh">0xffffff8007e1adf0</span>, allowDeferFlag<span class="o">=</span><span class="mh">0x0</span>, delayAutounloadFlag<span class="o">=</span><span class="mh">0x0</span>, startOpt<span class="o">=</span><span class="mh">0x0</span>, startMatchingOpt<span class="o">=</span><span class="mh">0x0</span>, personalityNames<span class="o">=</span><span class="mh">0x0</span>) at OSKext.cpp:<span class="mh">4184</span>
+#<span class="mh">7</span>  <span class="mh">0xffffff80008f8c91</span> in OSKext::loadFromMkext (clientLogFilter<span class="o">=</span><span class="mh">0x0</span>, mkextBuffer<span class="o">=</span><span class="mh">0xffffff8046362400</span> <span class="s">"MKXTMOSX"</span>, mkextBufferLength<span class="o">=</span><span class="mh">0x2da8</span>, logInfoOut<span class="o">=</span><span class="mh">0xffffff804650bc30</span>, logInfoLengthOut<span class="o">=</span><span class="mh">0xffffff804650bc2c</span>) at OSKext.cpp:<span class="mh">3271</span>
+#<span class="mh">8</span>  <span class="mh">0xffffff8000909f32</span> in kext_request (hostPriv<span class="o">=</span><span class="mh">0xffffff8000c8bec0</span>, clientLogSpec<span class="o">=</span><span class="mh">0x0</span>, requestIn<span class="o">=</span><span class="mh">0xffffff80075c9d30</span>, requestLengthIn<span class="o">=</span><span class="mh">0x2da8</span>, responseOut<span class="o">=</span><span class="mh">0xffffff800a976918</span>, responseLengthOut<span class="o">=</span><span class="mh">0xffffff800a976940</span>, logDataOut<span class="o">=</span><span class="mh">0xffffff800a976928</span>, logDataLengthOut<span class="o">=</span><span class="mh">0xffffff800a976944</span>, op_result<span class="o">=</span><span class="mh">0xffffff800a976948</span>) at OSKextLib.cpp:<span class="mh">281</span>
+#<span class="mh">9</span>  <span class="mh">0xffffff800028d9ab</span> in _Xkext_request (InHeadP<span class="o">=</span><span class="mh">0xffffff800abbec38</span>, OutHeadP<span class="o">=</span><span class="mh">0xffffff800a9768f4</span>) at host_priv_server.c:<span class="mh">5961</span>
+#<span class="mh">10</span> <span class="mh">0xffffff80002443d2</span> in ipc_kobject_server (request<span class="o">=</span><span class="mh">0xffffff800abbebc0</span>) at ipc_kobject.c:<span class="mh">339</span>
+#<span class="mh">11</span> <span class="mh">0xffffff8000221570</span> in ipc_kmsg_send (kmsg<span class="o">=</span><span class="mh">0xffffff800abbebc0</span>, option<span class="o">=</span><span class="mh">0x0</span>, send_timeout<span class="o">=</span><span class="mh">0x0</span>) at ipc_kmsg.c:<span class="mh">1376</span>
+#<span class="mh">12</span> <span class="mh">0xffffff8000237393</span> in mach_msg_overwrite_trap (args<span class="o">=</span><span class="mh">0xffffff80067c65a4</span>) at mach_msg.c:<span class="mh">487</span>
+#<span class="mh">13</span> <span class="mh">0xffffff80002375b4</span> in mach_msg_trap (args<span class="o">=</span><span class="mh">0xffffff80067c65a4</span>) at mach_msg.c:<span class="mh">554</span>
+#<span class="mh">14</span> <span class="mh">0xffffff8000354a01</span> in mach_call_munger<span class="mh">64</span> (state<span class="o">=</span><span class="mh">0xffffff80067c65a0</span>) at bsd_i<span class="mh">386</span>.c:<span class="mh">534</span></code></pre>
+
+<p>If you’re debugging a kernel extension that you are writing yourself (or have the code for) a better method of dropping into the debugger is to put an <code>int 3</code> (software breakpoint) in your code at the point you want to break, like this:</p>
+
+<pre><code class="language-c"><span class="n">kern_return_t</span> <span class="nf">DebugTest_start</span><span class="p">(</span><span class="n">kmod_info_t</span> <span class="o">*</span> <span class="n">ki</span><span class="p">,</span> <span class="kt">void</span> <span class="o">*</span><span class="n">d</span><span class="p">)</span>
+<span class="p">{</span>
+    <span class="n">printf</span><span class="p">(</span><span class="s">"hurr</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
+    <span class="n">asm</span><span class="p">(</span><span class="s">"int $3"</span><span class="p">);</span>
+    <span class="n">derp</span><span class="p">();</span>
+    <span class="k">return</span> <span class="n">KERN_SUCCESS</span><span class="p">;</span>
+<span class="p">}</span></code></pre>
+
+<p>Now when we load this kext we get dropped into the debugger:</p>
+
+<pre><code class="language-gdb">Program received signal SIGTRAP, Trace/breakpoint trap.
+<span class="mh">0xffffff7f80b2af12</span> in ?? ()</code></pre>
+
+<p>The call stack at this point looks somewhat similar to before, passing through the <code>OSKext</code> class:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">bt</span>
+#<span class="mh">0</span>  <span class="mh">0xffffff7f80b27f12</span> in ?? ()
+#<span class="mh">1</span>  <span class="mh">0xffffff80008eebb4</span> in OSKext::start (this<span class="o">=</span><span class="mh">0xffffff8007d37400</span>, startDependenciesFlag<span class="o">=</span><span class="mh">0x1</span>) at OSKext.cpp:<span class="mh">5456</span>
+#<span class="mh">2</span>  <span class="mh">0xffffff80008f3e97</span> in OSKext::load (this<span class="o">=</span><span class="mh">0xffffff8007d37400</span>, startOpt<span class="o">=</span><span class="mh">0x0</span>, startMatchingOpt<span class="o">=</span><span class="mh">0x0</span>, personalityNames<span class="o">=</span><span class="mh">0x0</span>) at OSKext.cpp:<span class="mh">4475</span>
+#<span class="mh">3</span>  <span class="mh">0xffffff80008f741b</span> in OSKext::loadKextWithIdentifier (kextIdentifier<span class="o">=</span><span class="mh">0xffffff80068955b0</span>, allowDeferFlag<span class="o">=</span><span class="mh">0x0</span>, delayAutounloadFlag<span class="o">=</span><span class="mh">0x0</span>, startOpt<span class="o">=</span><span class="mh">0x0</span>, startMatchingOpt<span class="o">=</span><span class="mh">0x0</span>, personalityNames<span class="o">=</span><span class="mh">0x0</span>) at OSKext.cpp:<span class="mh">4184</span>
+#<span class="mh">4</span>  <span class="mh">0xffffff80008f8c91</span> in OSKext::loadFromMkext (clientLogFilter<span class="o">=</span><span class="mh">0x0</span>, mkextBuffer<span class="o">=</span><span class="mh">0xffffff804623e400</span> <span class="s">"MKXTMOSX"</span>, mkextBufferLength<span class="o">=</span><span class="mh">0x2da8</span>, logInfoOut<span class="o">=</span><span class="mh">0xffffff8045c23c30</span>, logInfoLengthOut<span class="o">=</span><span class="mh">0xffffff8045c23c2c</span>) at OSKext.cpp:<span class="mh">3271</span>
+<span class="cs">&lt;snip&gt;</span></code></pre>
+
+<p>And we can disassemble the code at and after the breakpoint:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">x</span>/<span class="mi">11</span><span class="kc">i</span> <span class="mh">0xffffff7f80b2df12</span> - <span class="mh">1</span>
+<span class="mh">0xffffff7f80b2df11</span>:	int<span class="mh">3</span>   
+<span class="mh">0xffffff7f80b2df12</span>:	xor    cl,cl
+<span class="mh">0xffffff7f80b2df14</span>:	mov    al,cl
+<span class="mh">0xffffff7f80b2df16</span>:	call   <span class="mh">0xffffff7f80b2df70</span>
+<span class="mh">0xffffff7f80b2df1b</span>:	mov    DWORD PTR [rbp-<span class="mh">0x18</span>],<span class="mh">0x0</span>
+<span class="mh">0xffffff7f80b2df22</span>:	mov    eax,DWORD PTR [rbp-<span class="mh">0x18</span>]
+<span class="mh">0xffffff7f80b2df25</span>:	mov    DWORD PTR [rbp-<span class="mh">0x14</span>],eax
+<span class="mh">0xffffff7f80b2df28</span>:	mov    eax,DWORD PTR [rbp-<span class="mh">0x14</span>]
+<span class="mh">0xffffff7f80b2df2b</span>:	add    rsp,<span class="mh">0x20</span>
+<span class="mh">0xffffff7f80b2df2f</span>:	pop    rbp
+<span class="mh">0xffffff7f80b2df30</span>:	ret</code></pre>
+
+<p>This corresponds to the following code from the binary (extracted using <code>otool -tv</code>):</p>
+
+<pre><code class="language-s"><span class="m">0000000000000</span>f11	int	<span class="p">$</span><span class="m">0</span>x3
+<span class="m">0000000000000</span>f12	xorb	<span class="o">%</span>cl<span class="p">,</span><span class="o">%</span>cl
+<span class="m">0000000000000</span>f14	movb	<span class="o">%</span>cl<span class="p">,</span><span class="o">%</span>al
+<span class="m">0000000000000</span>f16	callq	<span class="m">0</span>x00000f70
+<span class="m">0000000000000</span>f1b	movl	<span class="p">$</span><span class="m">0</span>x00000000<span class="p">,</span><span class="m">0</span>xe8<span class="p">(</span><span class="o">%</span>rbp<span class="p">)</span>
+<span class="m">0000000000000</span>f22	movl	<span class="m">0</span>xe8<span class="p">(</span><span class="o">%</span>rbp<span class="p">),</span><span class="o">%</span>eax
+<span class="m">0000000000000</span>f25	movl	<span class="o">%</span>eax<span class="p">,</span><span class="m">0</span>xec<span class="p">(</span><span class="o">%</span>rbp<span class="p">)</span>
+<span class="m">0000000000000</span>f28	movl	<span class="m">0</span>xec<span class="p">(</span><span class="o">%</span>rbp<span class="p">),</span><span class="o">%</span>eax
+<span class="m">0000000000000</span>f2b	addq	<span class="p">$</span><span class="m">0</span>x20<span class="p">,</span><span class="o">%</span>rsp
+<span class="m">0000000000000</span>f2f	popq	<span class="o">%</span>rbp
+<span class="m">0000000000000</span>f30	ret</code></pre>
+
+<h2 id="poking-around-in-kernel-memory">Poking around in kernel memory</h2>
+
+<p>Let’s check out a few neat things in memory. The start of the Mach-O header for the kernel image in memory:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">x</span>/<span class="kc">x</span> <span class="mh">0xffffff8000200000</span>
+<span class="mh">0xffffff8000200000</span>:	<span class="mh">0xfeedfacf</span></code></pre>
+
+<p>This is the “magic number” indicating a 64-bit Mach-O executable. The 32-bit version is <code>0xfeedface</code>.</p>
+
+<p>The “system verification code”:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">x</span>/<span class="kc">s</span> <span class="mh">0xffffff8000002000</span>
+<span class="mh">0xffffff8000002000</span>:	 <span class="s">"Catfish "</span></code></pre>
+
+<p>On previous PowerPC versions of the OS this was located at <code>0x5000</code> and said <code>"Hagfish "</code>. Here is the corresponding assembly source from <code>osfmk/x86_64/lowmem_vectors.s</code> in the kernel source tree:</p>
+
+<pre><code class="language-s"><span class="o">/*</span> 
+ <span class="o">*</span> on x86_64 the low mem vectors live here and get mapped to <span class="m">0</span>xffffff8000200000 at
+ <span class="o">*</span> system startup time
+ <span class="o">*/</span>
+
+	<span class="m">.</span>text
+	<span class="m">.</span>align	<span class="m">12</span>
+	<span class="m">.</span>globl	EXT<span class="p">(</span>lowGlo<span class="p">)</span>
+EXT<span class="p">(</span>lowGlo<span class="p">)</span>:
+
+	<span class="m">.</span>ascii <span class="s">"Catfish "</span>	<span class="o">/*</span> <span class="m">+0</span>x000 System verification code <span class="o">*/</span></code></pre>
+
+<p>Interestingly, that comment appears to be incorrect - <code>0xffffff8000200000</code> is where the kernel image itself starts and the stuff in <code>lowmem_vectors.s</code> starts at <code>0xffffff8000002000</code> as we’ve seen.</p>
+
+<p>If you’re interested in kernel internals (which you probably are if you’re reading this) then you might want to have a look at the <code>kgmacros</code> help at this point:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">help</span> kgm
+| These are the kernel gdb macros.  These gdb macros are intended to be
+| used when debugging a remote kernel via the kdp protocol.  Typically, you
+| would connect to your remote target like so:
+| 		 <span class="kt">(gdb)</span> <span class="nb">target</span> remote-kdp
+| 		 <span class="kt">(gdb)</span> <span class="nb">attach</span> &lt;name-of-remote-host&gt;
+<span class="cs">&lt;snip&gt;</span></code></pre>
+
+<p>There’s heaps of cool and useful stuff there to look at.</p>
+
+<p>Listing the process tree by walking the list from <code>allproc</code> down:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">showproctree</span>
+PID   PROCESS       POINTER]
+<span class="o">===</span>   <span class="o">=======</span>       <span class="o">=======</span>
+<span class="mh">0</span>    kernel_task      [ <span class="mh">0xffffff80073e8820</span> ]
+|--<span class="mh">1</span>    launchd      [ <span class="mh">0xffffff80073e8820</span> ]
+|  |--<span class="mh">163</span>    xpchelper      [ <span class="mh">0xffffff800912a9f0</span> ] 
+|  |--<span class="mh">158</span>    launchd    [ <span class="mh">0xffffff8007c65e40</span> ]
+|  |  |--<span class="mh">162</span>    distnoted      [ <span class="mh">0xffffff80081f8010</span> ] 
+|  |  |--<span class="mh">161</span>    mdworker    [ <span class="mh">0xffffff80073e83d0</span> ]
+|  |--<span class="mh">157</span>    mdworker    [ <span class="mh">0xffffff80082c6010</span> ]
+|  |--<span class="mh">139</span>    com.apple.dock.e    [ <span class="mh">0xffffff800912ae40</span> ]
+|  |--<span class="mh">138</span>    filecoordination    [ <span class="mh">0xffffff800912b290</span> ]
+|  |--<span class="mh">111</span>    xpchelper    [ <span class="mh">0xffffff8007c66f80</span> ]
+|  |--<span class="mh">106</span>    launchdadd    [ <span class="mh">0xffffff80081fa290</span> ]
+|  |--<span class="mh">104</span>    launchd    [ <span class="mh">0xffffff80082c86e0</span> ]
+<span class="cs">&lt;snip&gt;</span></code></pre>
+
+<p>Print the <code>struct proc</code> (kernel version, not the userland one) for the kernel task:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">print</span> *(<span class="kt">struct proc *</span>)<span class="mh">0xffffff80073e8820</span>
+<span class="nv">$4</span> = {
+  <span class="nv">p_list</span> = {
+    <span class="nv">le_next</span> = <span class="mh">0xffffff8000cb4c20</span>, 
+    <span class="nv">le_prev</span> = <span class="mh">0xffffff80073e76e0</span>
+  }, 
+  <span class="nv">p_pid</span> = <span class="mh">0x1</span>, 
+  <span class="nv">task</span> = <span class="mh">0xffffff80067c25a0</span>, 
+  <span class="nv">p_pptr</span> = <span class="mh">0xffffff8000cb4c20</span>, 
+  <span class="nv">p_ppid</span> = <span class="mh">0x0</span>, 
+  <span class="nv">p_pgrpid</span> = <span class="mh">0x1</span>, 
+  <span class="nv">p_uid</span> = <span class="mh">0x0</span>, 
+  <span class="nv">p_gid</span> = <span class="mh">0x0</span>, 
+  <span class="cs">&lt;snip&gt;</span></code></pre>
+
+<p>Have a poke around and see what you can find.</p>
+
+<h2 id="source-level-debugging">Source-level debugging</h2>
+
+<p>Now that we’ve explored kernel memory a bit, it’s probably worth noting that you can use the kernel source for source-level debugging within GDB, or possibly even in Xcode (anybody done this?). Some of the documentation seems to be a bit out of date on this - e.g. the Kernel Programming Guide references a <code>.gdbinit</code> file defined in the <code>osfmk</code> directory (the Mach part of the kernel) which no longer exists, and previous documentation mentions creation of a <code>/SourceCache/xnu/...</code> directory for source-level debugging, but this trick doesn’t seem to work any more. It seems that these days the kernel debug symbol information relates only to filename and line number, not full file path, like this:</p>
+
+<pre><code class="language-gdb">Breakpoint <span class="mh">1</span>, kext_alloc (_addr<span class="o">=</span><span class="mh">0xffffff80463735f0</span>, size<span class="o">=</span><span class="mh">0x3000</span>, fixed<span class="o">=</span><span class="mh">0x0</span>) at kext_alloc.c:<span class="mh">107</span>
+<span class="mh">107</span>	kext_alloc.c: No such file or directory.</code></pre>
+
+<p>We can still load source code on a per-directory basis if we know where the file in question is located. In this instance it’s <code>osfmk/kern/kext_alloc.c</code> within the kernel source tree, we’ll do this:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">dir</span> /path/to/xnu-<span class="mh">1699</span>.<span class="mh">24</span>.<span class="mh">23</span>/osfmk/kern/</code></pre>
+
+<p>And magic:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">l</span>
+<span class="mh">102</span>	}
+<span class="mh">103</span>	
+<span class="mh">104</span>	kern_return_t
+<span class="mh">105</span>	kext_alloc(vm_offset_t *_addr, vm_size_t size, boolean_t fixed)
+<span class="mh">106</span>	{
+<span class="mh">107</span>	    kern_return_t rval <span class="o">=</span> <span class="mh">0</span>;
+<span class="mh">108</span>	    mach_vm_offset_t addr <span class="o">=</span> (fixed) ? *_addr : kext_alloc_base;
+<span class="mh">109</span>	    int flags <span class="o">=</span> (fixed) ? VM_FLAGS_FIXED : VM_FLAGS_ANYWHERE;
+<span class="mh">110</span>	 
+<span class="mh">111</span>	    /* Allocate the kext virtual memory */</code></pre>
+
+<p>Go grab yourself a copy of the source for your kernel version at <a href="http://www.opensource.apple.com/">opensource.apple.com</a> and give it a try.</p>
+
+<h2 id="so-yeah">So, yeah…</h2>
+
+<p>Have fun.</p>
+
+
+  
+	<hr/>
+  
+
+              </div>
+            </div>
+            <div class="grid_3">
+              <div id="sidebar">
+                <h2>PAGES</h2>
+                <ul>
+                  <li><a href="/">Home</a></li>
+                  <li><a href="/about">About</a></li>
+                  <li><a href="/downloads">Downloads</a></li>
+                </ul>
+                <h2>TAGS</h2>
+                <p><a class="tagcloud" style="font-size:78.23529411764706%;" href="/tag/voltron/" rel="tag">voltron</a> <a class="tagcloud" style="font-size:85.29411764705883%;" href="/tag/debugging/" rel="tag">debugging</a> <a class="tagcloud" style="font-size:85.29411764705883%;" href="/tag/gdb/" rel="tag">gdb</a> <a class="tagcloud" style="font-size:64.11764705882352%;" href="/tag/lldb/" rel="tag">lldb</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/calculon/" rel="tag">calculon</a> <a class="tagcloud" style="font-size:120.58823529411765%;" href="/tag/efi/" rel="tag">efi</a> <a class="tagcloud" style="font-size:71.17647058823529%;" href="/tag/ida pro/" rel="tag">ida pro</a> <a class="tagcloud" style="font-size:64.11764705882352%;" href="/tag/idapython/" rel="tag">idapython</a> <a class="tagcloud" style="font-size:64.11764705882352%;" href="/tag/reversing/" rel="tag">reversing</a> <a class="tagcloud" style="font-size:85.29411764705883%;" href="/tag/rootkits/" rel="tag">rootkits</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/refind/" rel="tag">refind</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/black hat/" rel="tag">black hat</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/firmware/" rel="tag">firmware</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/bus pirate/" rel="tag">bus pirate</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/flashrom/" rel="tag">flashrom</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/pci/" rel="tag">pci</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/syscan/" rel="tag">syscan</a> <a class="tagcloud" style="font-size:78.23529411764706%;" href="/tag/mac os x/" rel="tag">mac os x</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/x86-64/" rel="tag">x86-64</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/clang/" rel="tag">clang</a> <a class="tagcloud" style="font-size:71.17647058823529%;" href="/tag/kernel/" rel="tag">kernel</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/kexts/" rel="tag">kexts</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/mach-o/" rel="tag">mach-o</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/python/" rel="tag">python</a> <a class="tagcloud" style="font-size:64.11764705882352%;" href="/tag/vmware/" rel="tag">vmware</a> </p>
+                <h2>POSTS</h2>
+                <ul>
+                  
+                    <li><a href="/posts/2015/05/building-voltron-command-plugins/">Building Voltron Command Plugins</a></li>
+                  
+                    <li><a href="/posts/2014/12/building-voltron-views/">Building Voltron Views</a></li>
+                  
+                    <li><a href="/posts/2013/10/calculon-a-calculator-for-nerds/">Calculon - a calculator for nerds</a></li>
+                  
+                    <li><a href="/posts/2013/06/voltron-a-hacky-ui-for-gdb/">Voltron - a hacky UI for GDB</a></li>
+                  
+                    <li><a href="/posts/2012/12/te-loader-for-ida-pro/">TE loader for IDA Pro</a></li>
+                  
+                    <li><a href="/posts/2012/10/ruxcon/">Ruxcon 2012</a></li>
+                  
+                    <li><a href="/posts/2012/09/ida-pro-scripts-for-efi-reversing/">IDA Pro scripts for EFI reversing</a></li>
+                  
+                    <li><a href="/posts/2012/08/building-refind-with-edk2-on-osx/">Building rEFInd with EDKII on Mac OS X</a></li>
+                  
+                    <li><a href="/posts/2012/07/black-hat-usa-2012/">Black Hat USA 2012</a></li>
+                  
+                    <li><a href="/posts/2012/06/unbricking-a-macbook/">Un-bricking a MacBook</a></li>
+                  
+                    <li><a href="/posts/2012/06/send-me-your-lspci/">Send me your `lspci -vv`</a></li>
+                  
+                    <li><a href="/posts/2012/05/syscan-2012-is-over/">SyScan 2012 is Over</a></li>
+                  
+                    <li><a href="/posts/2012/03/rip-relative-addressing-and-kernel-payloads/">RIP-Relative Addressing and Kernel Payloads</a></li>
+                  
+                    <li><a href="/posts/2012/02/resolving-kernel-symbols/">Resolving kernel symbols</a></li>
+                  
+                    <li><a href="/posts/2012/02/carving-up-efi-fat-binaries/">Carving up EFI fat binaries</a></li>
+                  
+                    <li><a href="/posts/2012/02/vmware-hardware-debugging/">VMware debugging II&#58; "Hardware" debugging</a></li>
+                  
+                    <li><a href="/posts/2012/02/debugging-the-mac-os-x-kernel-with-vmware-and-gdb/">Debugging the Mac OS X kernel with VMware and GDB</a></li>
+                  
+                </ul>
+                <h2>SEARCH</h2>
+                <form method="get" action="http://www.google.com/search">
+                  <fieldset>
+                    <input type="hidden" name="sitesearch" value="ho.ax"/>
+                    <input type="text" class="searchbox" name="q" size="31" maxlength="255" value=""/>
+                    <input type="image" class="searchbutton" width=24 height=24 src="/img/search.png" value="Search"/>
+                  </fieldset>
+                </form>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="splitbar">&nbsp;</div>
+      <div id="footer">
+          <div class="container_12">
+            <div class="grid_9">
+              <p>Last updated on 9 May 2015 by . Please don't steal my stuff.</p>
+            </div>
+            <div class="grid_3">
+              <div class="media">
+                <div style="float: left"><a class="twitter" href="http://twitter.com/snare"></a></div>
+                <div style="float: left"><a class="rss" href="/feed.xml"></a></div>
+              </div>
+            </div>
+        </div>
+      </div>
+    </div>
+  <script type="text/javascript">
+
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-29183428-1']);
+  _gaq.push(['_trackPageview']);
+
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+
+  </script>
+  <img src="/img/twitter_active.png" style="display: none" />
+  <img src="/img/rss_active.png" style="display: none" />
+  </body>
+</html>

@@ -1,0 +1,410 @@
+<!DOCTYPE HTML>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>ho.ax - TE loader for IDA Pro</title>
+    <link rel="stylesheet" type="text/css" href="/css/reset.css" media="screen">
+    <link rel="stylesheet" type="text/css" href="/css/grid.css" media="screen">
+    <link rel="stylesheet" type="text/css" href="/css/style.css" media="screen">
+    <link rel="stylesheet" type="text/css" href="/css/highlight.css" media="screen">
+    <link rel="alternate" type="application/rss+xml" title="RSS" href="http://ho.ax/feed.xml">
+  </head>
+  <body>
+      <div id="container">
+        <div id="header">
+          <div class="container_12">
+            <div class="grid_6">
+              <h1><a href="/">ho/ax.</a></h1>
+            </div>
+            <div class="grid_6">
+              <div class="media">
+                <div style="float: left"><a class="twitter" href="http://twitter.com/snare"></a></div>
+                <div style="float: left"><a class="rss" href="/feed.xml"></a></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div id="splitbar">&nbsp;</div>
+        <div id="main">
+          <div class="container_12">
+            <div class="grid_9">
+              <div id="content">
+                <h1><a href="/posts/2012/12/te-loader-for-ida-pro/">TE loader for IDA Pro</a></h1>
+<p class="metadata">
+	Posted by snare on 20 December 2012. Tags: <a class="tag" href="/tag/efi/" rel="tag">efi</a>, <a class="tag" href="/tag/ida pro/" rel="tag">ida pro</a>, <a class="tag" href="/tag/idapython/" rel="tag">idapython</a>, <a class="tag" href="/tag/reversing/" rel="tag">reversing</a>
+</p>
+
+<p>The EFI documentation defines a simplified version of the PE32 image format, called “TE”, which is intended to reduce the overheads of the PE/COFF headers. The document in which this format is defined can be found <a href="http://www.intel.com/content/dam/doc/reference-guide/efi-pei-cis-v091.pdf">here</a>. Apple’s EFI firmare (or at least one version I was looking at) uses the TE image format for the SEC phase binary, but IDA Pro doesn’t seem to understand TE, so I decided to have a crack at writing a loader to handle TE images. This post describes both a bit about the TE image format, and how to go about writing a basic image loader for IDA Pro in Python.</p>
+
+<p>First, a quick look at the TE image format. It is a stripped down version of PE32, so if you’re familiar with that then you’ll probably recognise these fields. The main image header looks something like this:</p>
+
+<pre><code class="language-c"><span class="k">typedef</span> <span class="k">struct</span> <span class="p">{</span>
+    <span class="n">UINT16</span>                   <span class="n">Signature</span><span class="p">;</span>
+    <span class="n">UINT16</span>                   <span class="n">Machine</span><span class="p">;</span>
+    <span class="n">UINT8</span>                    <span class="n">NumberOfSections</span><span class="p">;</span>
+    <span class="n">UINT8</span>                    <span class="n">Subsystem</span><span class="p">;</span>
+    <span class="n">UINT16</span>                   <span class="n">StrippedSize</span><span class="p">;</span>
+    <span class="n">UINT32</span>                   <span class="n">AddressOfEntryPoint</span><span class="p">;</span>
+    <span class="n">UINT32</span>                   <span class="n">BaseOfCode</span><span class="p">;</span>
+    <span class="n">UINT64</span>                   <span class="n">ImageBase</span><span class="p">;</span>
+    <span class="n">EFI_IMAGE_DATA_DIRECTORY</span> <span class="n">DataDirectory</span><span class="p">[</span><span class="mi">2</span><span class="p">];</span>
+<span class="p">}</span> <span class="n">TEImageHeader</span><span class="p">;</span></code></pre>
+
+<p>With the <code>EFI_IMAGE_DATA_DIRECTORY</code> structure looking like this:</p>
+
+<pre><code class="language-c"><span class="k">typedef</span> <span class="k">struct</span> <span class="p">{</span>
+    <span class="n">UINT32</span> <span class="n">VirtualAddress</span><span class="p">;</span>
+    <span class="n">UINT32</span> <span class="n">Size</span><span class="p">;</span>
+<span class="p">}</span> <span class="n">EFI_IMAGE_DATA_DIRECTORY</span><span class="p">;</span></code></pre>
+
+<p>Directly following the main header is a set of section headers (<code>NumberOfSections</code> of them, funnily enough) that look like this:</p>
+
+<pre><code class="language-c"><span class="k">typedef</span> <span class="k">struct</span><span class="p">{</span>
+    <span class="kt">char</span>    <span class="n">Name</span><span class="p">[</span><span class="mi">8</span><span class="p">];</span>
+    <span class="n">int32</span>   <span class="n">VirtualSize</span><span class="p">;</span> 
+    <span class="n">int32</span>   <span class="n">VirtualAddress</span><span class="p">;</span> 
+    <span class="n">int32</span>   <span class="n">SizeOfRawData</span><span class="p">;</span>   
+    <span class="n">int32</span>   <span class="n">PointerToRawData</span><span class="p">;</span>  
+    <span class="n">int32</span>   <span class="n">PointerToRelocations</span><span class="p">;</span>  
+    <span class="n">int32</span>   <span class="n">PointerToLinenumbers</span><span class="p">;</span> 
+    <span class="n">int16</span>   <span class="n">NumberOfRelocations</span><span class="p">;</span>   
+    <span class="n">int16</span>   <span class="n">NumberOfLinenumbers</span><span class="p">;</span> 
+    <span class="n">int32</span>   <span class="n">Characteristics</span><span class="p">;</span>  
+<span class="p">}</span> <span class="n">SectionHeader</span><span class="p">;</span></code></pre>
+
+<p>Following the section headers is the data for the sections.</p>
+
+<p>So, the first thing I did was put together a basic template for everybody’s favourite hex editor, <a href="http://www.sweetscape.com/010editor/">010 Editor</a>, using the structs defined above:</p>
+
+<pre><code class="language-c"><span class="n">local</span> <span class="n">int32</span> <span class="n">i</span><span class="p">;</span>
+
+<span class="k">typedef</span> <span class="n">UBYTE</span> <span class="n">UINT8</span><span class="p">;</span>
+
+<span class="c1">// insert those structs I defined above</span>
+
+<span class="k">struct</span> <span class="nf">SectionData</span> <span class="p">(</span><span class="kt">int</span> <span class="n">size</span><span class="p">)</span> <span class="p">{</span>
+    <span class="kt">char</span> <span class="n">data</span><span class="p">[</span><span class="n">size</span><span class="p">];</span>
+<span class="p">};</span>
+
+<span class="n">TEImageHeader</span> <span class="n">header</span><span class="p">;</span>
+<span class="n">SectionHeader</span> <span class="n">sec_header</span><span class="p">[</span><span class="n">header</span><span class="p">.</span><span class="n">NumberOfSections</span><span class="p">];</span>
+<span class="k">for</span> <span class="p">(</span><span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">header</span><span class="p">.</span><span class="n">NumberOfSections</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">SectionData</span> <span class="n">section</span><span class="p">(</span><span class="n">sec_header</span><span class="p">[</span><span class="n">i</span><span class="p">].</span><span class="n">SizeOfRawData</span><span class="p">);</span>
+<span class="p">}</span></code></pre>
+
+<p>This results in something that looks about right:</p>
+
+<p><img src="/posts/2012/12/010.png" alt="010dump"></p>
+
+<p>The next step was to rewrite it in Python, which went something like this:</p>
+
+<pre><code class="language-python"><span class="kn">import</span> <span class="nn">struct</span>
+<span class="kn">import</span> <span class="nn">sys</span>
+<span class="kn">import</span> <span class="nn">os</span>
+<span class="k">try</span><span class="p">:</span>
+    <span class="kn">from</span> <span class="nn">awesome_print</span> <span class="kn">import</span> <span class="n">ap</span> <span class="k">as</span> <span class="n">pp</span>
+<span class="k">except</span><span class="p">:</span>
+    <span class="kn">from</span> <span class="nn">pprint</span> <span class="kn">import</span> <span class="n">pprint</span> <span class="k">as</span> <span class="n">pp</span>
+
+<span class="k">class</span> <span class="nc">TEImage</span><span class="p">:</span>
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">f</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">offset</span> <span class="o">=</span> <span class="n">f</span><span class="o">.</span><span class="n">tell</span><span class="p">()</span>
+
+        <span class="c"># read header</span>
+        <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">signature</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">machine</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_sections</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">subsystem</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stripped_size</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">entry_point_addr</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">code_base</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">image_base</span><span class="p">)</span> <span class="o">=</span> <span class="n">struct</span><span class="o">.</span><span class="n">unpack</span><span class="p">(</span><span class="s">"&lt;HHBBHLLQ"</span><span class="p">,</span> <span class="n">f</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="mi">24</span><span class="p">))</span>
+        <span class="p">(</span><span class="n">d1</span><span class="p">,</span><span class="n">d2</span><span class="p">,</span><span class="n">d3</span><span class="p">,</span><span class="n">d4</span><span class="p">)</span> <span class="o">=</span> <span class="n">struct</span><span class="o">.</span><span class="n">unpack</span><span class="p">(</span><span class="s">"&lt;IIII"</span><span class="p">,</span> <span class="n">f</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="mi">16</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">data_dir</span> <span class="o">=</span> <span class="p">[(</span><span class="n">d1</span><span class="p">,</span><span class="n">d2</span><span class="p">),(</span><span class="n">d3</span><span class="p">,</span><span class="n">d4</span><span class="p">)]</span>
+
+        <span class="c"># read section table</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sections</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_sections</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">sections</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">TEImageSection</span><span class="p">(</span><span class="n">f</span><span class="p">))</span>
+
+<span class="k">class</span> <span class="nc">TEImageSection</span><span class="p">:</span>
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">f</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">offset</span> <span class="o">=</span> <span class="n">f</span><span class="o">.</span><span class="n">tell</span><span class="p">()</span>
+
+        <span class="c"># read header</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">name</span> <span class="o">=</span> <span class="n">f</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="mi">8</span><span class="p">)</span>
+        <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">virt_size</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">virt_addr</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">data_size</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">ptr_to_data</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">ptr_to_relocs</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">ptr_to_line_nums</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">num_relocs</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_line_nums</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">characteristics</span><span class="p">)</span> <span class="o">=</span> <span class="n">struct</span><span class="o">.</span><span class="n">unpack</span><span class="p">(</span><span class="s">"&lt;LLLLLLHHL"</span><span class="p">,</span> <span class="n">f</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="mi">32</span><span class="p">))</span>
+
+<span class="k">if</span> <span class="n">__name__</span> <span class="o">==</span> <span class="s">'__main__'</span><span class="p">:</span>
+    <span class="n">te</span> <span class="o">=</span> <span class="n">TEImage</span><span class="p">(</span><span class="nb">open</span><span class="p">(</span><span class="n">sys</span><span class="o">.</span><span class="n">argv</span><span class="p">[</span><span class="mi">1</span><span class="p">]))</span>
+    <span class="n">pp</span><span class="p">(</span><span class="n">te</span><span class="o">.</span><span class="n">__dict__</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">te</span><span class="o">.</span><span class="n">sections</span><span class="p">)):</span>
+        <span class="k">print</span> <span class="s">"section </span><span class="si">%i</span><span class="s">:"</span> <span class="o">%</span> <span class="n">i</span>
+        <span class="n">pp</span><span class="p">(</span><span class="n">te</span><span class="o">.</span><span class="n">sections</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="o">.</span><span class="n">__dict__</span><span class="p">)</span></code></pre>
+
+<p>Pretty self-explanatory - classes for the image and section headers using the <code>struct</code> module to unpack the headers, and the main section just creating an image object from whatever file was passed as the first argument and then prettyprinting the contents of the object.</p>
+
+<p>On my binary the output looks like this:</p>
+
+<pre><code>{
+         subsystem: 11,
+     stripped_size: 440,
+        image_base: 4294965344,
+          data_dir: [
+    [0] (
+      [0] 2048,
+      [1] 28
+    ),
+    [1] (
+      [0] 0,
+      [1] 0
+    )
+  ],
+  entry_point_addr: 1024,
+         code_base: 640,
+      num_sections: 5,
+            offset: 0,
+           machine: 332,
+         signature: 23126,
+          sections: [
+    [0] &lt;__main__.TEImageSection instance at 0x1058d3ab8&gt;,
+    [1] &lt;__main__.TEImageSection instance at 0x1058d3b48&gt;,
+    [2] &lt;__main__.TEImageSection instance at 0x1058d3b90&gt;,
+    [3] &lt;__main__.TEImageSection instance at 0x1058d3bd8&gt;,
+    [4] &lt;__main__.TEImageSection instance at 0x1058d3c20&gt;
+  ]
+}
+section 0:
+{
+              name: .text,
+        num_relocs: 0,
+   characteristics: 1610612768,
+  ptr_to_line_nums: 0,
+     num_line_nums: 0,
+         virt_addr: 640,
+       ptr_to_data: 640,
+            offset: 40,
+         virt_size: 359,
+         data_size: 384,
+     ptr_to_relocs: 0
+}
+section 1:
+{
+              name: _TEXT_RE,
+        num_relocs: 0,
+   characteristics: 1610612768,
+  ptr_to_line_nums: 0,
+     num_line_nums: 0,
+         virt_addr: 1024,
+       ptr_to_data: 1024,
+            offset: 80,
+         virt_size: 59,
+         data_size: 64,
+     ptr_to_relocs: 0
+}
+section 2:
+{
+              name: _TEXT_PR,
+        num_relocs: 0,
+   characteristics: 1610612768,
+  ptr_to_line_nums: 0,
+     num_line_nums: 0,
+         virt_addr: 1088,
+       ptr_to_data: 1088,
+            offset: 120,
+         virt_size: 920,
+         data_size: 928,
+     ptr_to_relocs: 0
+}
+section 3:
+{
+              name: .data,
+        num_relocs: 0,
+   characteristics: 3221225536,
+  ptr_to_line_nums: 0,
+     num_line_nums: 0,
+         virt_addr: 2016,
+       ptr_to_data: 2016,
+            offset: 160,
+         virt_size: 32,
+         data_size: 32,
+     ptr_to_relocs: 0
+}
+section 4:
+{
+              name: .reloc,
+        num_relocs: 0,
+   characteristics: 0,
+  ptr_to_line_nums: 0,
+     num_line_nums: 0,
+         virt_addr: 2048,
+       ptr_to_data: 2048,
+            offset: 200,
+         virt_size: 30,
+         data_size: 32,
+     ptr_to_relocs: 0
+}
+</code></pre>
+
+<p>Not pretty, but it looks like it’s doing the job.</p>
+
+<p>The final stage is to add the IDA loading code. IDA loaders can be implemented as fully fledged plugins with the SDK, or as IDC or IDAPython scripts. I obviously chose the last option, because who wouldn’t? IDA loaders rely on two functions: <code>accept_file()</code> and <code>load_file()</code>. <code>accept_file()</code> is called in every loader when a binary is opened in IDA, to ask the loader if it can load that type of file. All we have to do in this function is check the file’s magic number and make sure it looks like a TE binary:</p>
+
+<pre><code class="language-python"><span class="n">TE_MAGIC</span> <span class="o">=</span> <span class="s">"VZ"</span>
+
+<span class="k">def</span> <span class="nf">accept_file</span><span class="p">(</span><span class="n">f</span><span class="p">,</span> <span class="n">n</span><span class="p">):</span>
+    <span class="n">retval</span> <span class="o">=</span> <span class="mi">0</span>
+
+    <span class="k">if</span> <span class="n">n</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="n">f</span><span class="o">.</span><span class="n">seek</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">f</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span> <span class="o">==</span> <span class="n">TE_MAGIC</span><span class="p">:</span>
+            <span class="n">retval</span> <span class="o">=</span> <span class="s">"TE executable"</span>
+
+    <span class="k">return</span> <span class="n">retval</span></code></pre>
+
+<p>The <code>f</code> parameter here is an open file handle, and n is the number of times this loader has been queried so far (not really important for this type of loader). If it looks good, we return the string that will appear in IDA’s “Load a new file” window, otherwise return 0.</p>
+
+<p><code>load_file()</code> is where the good stuff happens. As the name indicates, this function is called by IDA to actually perform the loading of the file. Hurr.</p>
+
+<pre><code class="language-python"><span class="n">SECTION_CLASSES</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="n">b</span><span class="s">".text</span><span class="se">\0\0\0</span><span class="s">"</span><span class="p">:</span> <span class="s">"CODE"</span><span class="p">,</span>
+    <span class="n">b</span><span class="s">".data</span><span class="se">\0\0\0</span><span class="s">"</span><span class="p">:</span> <span class="s">"DATA"</span><span class="p">,</span>
+    <span class="n">b</span><span class="s">".reloc</span><span class="se">\0\0</span><span class="s">"</span><span class="p">:</span>  <span class="s">"DATA"</span><span class="p">,</span>
+    <span class="n">b</span><span class="s">"_TEXT_RE"</span><span class="p">:</span>    <span class="s">"CODE"</span><span class="p">,</span>
+    <span class="n">b</span><span class="s">"_TEXT_PR"</span><span class="p">:</span>    <span class="s">"CODE"</span>
+<span class="p">}</span>
+
+<span class="n">SECTION_MODES</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="n">b</span><span class="s">"_TEXT_RE"</span><span class="p">:</span>    <span class="mi">0</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">def</span> <span class="nf">load_file</span><span class="p">(</span><span class="n">f</span><span class="p">,</span> <span class="n">neflags</span><span class="p">,</span> <span class="n">format</span><span class="p">):</span>
+    <span class="c"># parse header</span>
+    <span class="n">f</span><span class="o">.</span><span class="n">seek</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">te</span> <span class="o">=</span> <span class="n">TEImage</span><span class="p">(</span><span class="n">f</span><span class="p">)</span>
+
+    <span class="c"># load binary</span>
+    <span class="k">for</span> <span class="n">sec</span> <span class="ow">in</span> <span class="n">te</span><span class="o">.</span><span class="n">sections</span><span class="p">:</span>
+        <span class="n">seg_type</span> <span class="o">=</span> <span class="n">SECTION_CLASSES</span><span class="p">[</span><span class="n">sec</span><span class="o">.</span><span class="n">name</span><span class="p">]</span> <span class="k">if</span> <span class="n">sec</span><span class="o">.</span><span class="n">name</span> <span class="ow">in</span> <span class="n">SECTION_CLASSES</span><span class="o">.</span><span class="n">keys</span><span class="p">()</span> <span class="k">else</span> <span class="s">"DATA"</span>
+        <span class="n">seg_mode</span> <span class="o">=</span> <span class="n">SECTION_MODES</span><span class="p">[</span><span class="n">sec</span><span class="o">.</span><span class="n">name</span><span class="p">]</span> <span class="k">if</span> <span class="n">sec</span><span class="o">.</span><span class="n">name</span> <span class="ow">in</span> <span class="n">SECTION_MODES</span><span class="o">.</span><span class="n">keys</span><span class="p">()</span> <span class="k">else</span> <span class="mi">1</span>
+        <span class="n">f</span><span class="o">.</span><span class="n">file2base</span><span class="p">(</span><span class="n">f</span><span class="o">.</span><span class="n">tell</span><span class="p">(),</span> <span class="n">sec</span><span class="o">.</span><span class="n">virt_addr</span><span class="p">,</span> <span class="n">sec</span><span class="o">.</span><span class="n">virt_addr</span> <span class="o">+</span> <span class="n">sec</span><span class="o">.</span><span class="n">data_size</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="n">add_segm</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">sec</span><span class="o">.</span><span class="n">virt_addr</span><span class="p">,</span> <span class="n">sec</span><span class="o">.</span><span class="n">virt_addr</span> <span class="o">+</span> <span class="n">sec</span><span class="o">.</span><span class="n">virt_size</span><span class="p">,</span> <span class="n">sec</span><span class="o">.</span><span class="n">name</span><span class="p">,</span> <span class="n">seg_type</span><span class="p">)</span>
+        <span class="n">set_segm_addressing</span><span class="p">(</span><span class="n">get_segm_by_name</span><span class="p">(</span><span class="n">sec</span><span class="o">.</span><span class="n">name</span><span class="p">),</span> <span class="n">seg_mode</span><span class="p">)</span>
+
+    <span class="n">add_entry</span><span class="p">(</span><span class="n">te</span><span class="o">.</span><span class="n">entry_point_addr</span><span class="p">,</span> <span class="n">te</span><span class="o">.</span><span class="n">entry_point_addr</span><span class="p">,</span> <span class="s">"_start"</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="mi">1</span></code></pre>
+
+<p>So we first use the classes we built earlier to parse the headers. Then for each section (segment) we need to determine the class (ie. whether it’s data or code or relocations or whatever), and the addressing mode (this is important because the entry point will be in 16-bit mode). Call <code>file2base()</code> to read the section’s data into IDA at the virtual address specified in the section header, <code>add_segm()</code> to create a segment of the appropriate type at this virtual address, and <code>set_segm_addressing()</code> to mark the segment as 16-bit if necessary. Once we’ve added all the segments into IDA we mark the entry point, and return 1 to tell IDA all is well.</p>
+
+<p>To install the loader, I just symlinked it into IDA’s loaders directory. On OS X this is actually inside the application bundle at <em>idaq.app/Contents/MacOS/loaders/</em> (idaq64.app looks inside idaq.app as well).</p>
+
+<p>Now when we open IDA and drop in our TE binary we get some good news:</p>
+
+<p><img src="/posts/2012/12/load.png" alt="load"></p>
+
+<p>The binary is processed and the <code>.text</code> segment looks OK:</p>
+
+<p><img src="/posts/2012/12/text.png" alt="text"></p>
+
+<p>And here’s the entry point in 16-bit mode, the first bit of code executed by the CPU when you power on the Mac:</p>
+
+<p><img src="/posts/2012/12/entry.png" alt="text"></p>
+
+<p>You can see it there loading the GDT, and enabling protected mode and SSE extensions before carrying on with the rest of the CPU init stuff. Good times.</p>
+
+<p>So there you go - a simple binary loader for IDA Pro in Python. I haven’t bothered implementing relocation fixups and whatnot yet, but I probably will at some stage. It’s 2:41am and I’m tired. The source code is in the <a href="https://github.com/snarez/ida-efiutils">ida-efiutils</a> package on Github.</p>
+
+              </div>
+            </div>
+            <div class="grid_3">
+              <div id="sidebar">
+                <h2>PAGES</h2>
+                <ul>
+                  <li><a href="/">Home</a></li>
+                  <li><a href="/about">About</a></li>
+                  <li><a href="/downloads">Downloads</a></li>
+                </ul>
+                <h2>TAGS</h2>
+                <p><a class="tagcloud" style="font-size:78.23529411764706%;" href="/tag/voltron/" rel="tag">voltron</a> <a class="tagcloud" style="font-size:85.29411764705883%;" href="/tag/debugging/" rel="tag">debugging</a> <a class="tagcloud" style="font-size:85.29411764705883%;" href="/tag/gdb/" rel="tag">gdb</a> <a class="tagcloud" style="font-size:64.11764705882352%;" href="/tag/lldb/" rel="tag">lldb</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/calculon/" rel="tag">calculon</a> <a class="tagcloud" style="font-size:120.58823529411765%;" href="/tag/efi/" rel="tag">efi</a> <a class="tagcloud" style="font-size:71.17647058823529%;" href="/tag/ida pro/" rel="tag">ida pro</a> <a class="tagcloud" style="font-size:64.11764705882352%;" href="/tag/idapython/" rel="tag">idapython</a> <a class="tagcloud" style="font-size:64.11764705882352%;" href="/tag/reversing/" rel="tag">reversing</a> <a class="tagcloud" style="font-size:85.29411764705883%;" href="/tag/rootkits/" rel="tag">rootkits</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/refind/" rel="tag">refind</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/black hat/" rel="tag">black hat</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/firmware/" rel="tag">firmware</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/bus pirate/" rel="tag">bus pirate</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/flashrom/" rel="tag">flashrom</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/pci/" rel="tag">pci</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/syscan/" rel="tag">syscan</a> <a class="tagcloud" style="font-size:78.23529411764706%;" href="/tag/mac os x/" rel="tag">mac os x</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/x86-64/" rel="tag">x86-64</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/clang/" rel="tag">clang</a> <a class="tagcloud" style="font-size:71.17647058823529%;" href="/tag/kernel/" rel="tag">kernel</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/kexts/" rel="tag">kexts</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/mach-o/" rel="tag">mach-o</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/python/" rel="tag">python</a> <a class="tagcloud" style="font-size:64.11764705882352%;" href="/tag/vmware/" rel="tag">vmware</a> </p>
+                <h2>POSTS</h2>
+                <ul>
+                  
+                    <li><a href="/posts/2015/05/building-voltron-command-plugins/">Building Voltron Command Plugins</a></li>
+                  
+                    <li><a href="/posts/2014/12/building-voltron-views/">Building Voltron Views</a></li>
+                  
+                    <li><a href="/posts/2013/10/calculon-a-calculator-for-nerds/">Calculon - a calculator for nerds</a></li>
+                  
+                    <li><a href="/posts/2013/06/voltron-a-hacky-ui-for-gdb/">Voltron - a hacky UI for GDB</a></li>
+                  
+                    <li><a href="/posts/2012/12/te-loader-for-ida-pro/">TE loader for IDA Pro</a></li>
+                  
+                    <li><a href="/posts/2012/10/ruxcon/">Ruxcon 2012</a></li>
+                  
+                    <li><a href="/posts/2012/09/ida-pro-scripts-for-efi-reversing/">IDA Pro scripts for EFI reversing</a></li>
+                  
+                    <li><a href="/posts/2012/08/building-refind-with-edk2-on-osx/">Building rEFInd with EDKII on Mac OS X</a></li>
+                  
+                    <li><a href="/posts/2012/07/black-hat-usa-2012/">Black Hat USA 2012</a></li>
+                  
+                    <li><a href="/posts/2012/06/unbricking-a-macbook/">Un-bricking a MacBook</a></li>
+                  
+                    <li><a href="/posts/2012/06/send-me-your-lspci/">Send me your `lspci -vv`</a></li>
+                  
+                    <li><a href="/posts/2012/05/syscan-2012-is-over/">SyScan 2012 is Over</a></li>
+                  
+                    <li><a href="/posts/2012/03/rip-relative-addressing-and-kernel-payloads/">RIP-Relative Addressing and Kernel Payloads</a></li>
+                  
+                    <li><a href="/posts/2012/02/resolving-kernel-symbols/">Resolving kernel symbols</a></li>
+                  
+                    <li><a href="/posts/2012/02/carving-up-efi-fat-binaries/">Carving up EFI fat binaries</a></li>
+                  
+                    <li><a href="/posts/2012/02/vmware-hardware-debugging/">VMware debugging II&#58; "Hardware" debugging</a></li>
+                  
+                    <li><a href="/posts/2012/02/debugging-the-mac-os-x-kernel-with-vmware-and-gdb/">Debugging the Mac OS X kernel with VMware and GDB</a></li>
+                  
+                </ul>
+                <h2>SEARCH</h2>
+                <form method="get" action="http://www.google.com/search">
+                  <fieldset>
+                    <input type="hidden" name="sitesearch" value="ho.ax"/>
+                    <input type="text" class="searchbox" name="q" size="31" maxlength="255" value=""/>
+                    <input type="image" class="searchbutton" width=24 height=24 src="/img/search.png" value="Search"/>
+                  </fieldset>
+                </form>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="splitbar">&nbsp;</div>
+      <div id="footer">
+          <div class="container_12">
+            <div class="grid_9">
+              <p>Last updated on 9 May 2015 by snare. Please don't steal my stuff.</p>
+            </div>
+            <div class="grid_3">
+              <div class="media">
+                <div style="float: left"><a class="twitter" href="http://twitter.com/snare"></a></div>
+                <div style="float: left"><a class="rss" href="/feed.xml"></a></div>
+              </div>
+            </div>
+        </div>
+      </div>
+    </div>
+  <script type="text/javascript">
+
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-29183428-1']);
+  _gaq.push(['_trackPageview']);
+
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+
+  </script>
+  <img src="/img/twitter_active.png" style="display: none" />
+  <img src="/img/rss_active.png" style="display: none" />
+  </body>
+</html>

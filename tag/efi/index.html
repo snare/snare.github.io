@@ -1,0 +1,957 @@
+<!DOCTYPE HTML>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>ho.ax - </title>
+    <link rel="stylesheet" type="text/css" href="/css/reset.css" media="screen">
+    <link rel="stylesheet" type="text/css" href="/css/grid.css" media="screen">
+    <link rel="stylesheet" type="text/css" href="/css/style.css" media="screen">
+    <link rel="stylesheet" type="text/css" href="/css/highlight.css" media="screen">
+    <link rel="alternate" type="application/rss+xml" title="RSS" href="http://ho.ax/feed.xml">
+  </head>
+  <body>
+      <div id="container">
+        <div id="header">
+          <div class="container_12">
+            <div class="grid_6">
+              <h1><a href="/">ho/ax.</a></h1>
+            </div>
+            <div class="grid_6">
+              <div class="media">
+                <div style="float: left"><a class="twitter" href="http://twitter.com/snare"></a></div>
+                <div style="float: left"><a class="rss" href="/feed.xml"></a></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div id="splitbar">&nbsp;</div>
+        <div id="main">
+          <div class="container_12">
+            <div class="grid_9">
+              <div id="content">
+                
+  <h1><a href="/posts/2012/12/te-loader-for-ida-pro/">TE loader for IDA Pro</a></h1>
+<p class="metadata">
+	Posted by snare on 20 December 2012. Tags: <a class="tag" href="/tag/efi/" rel="tag">efi</a>, <a class="tag" href="/tag/ida pro/" rel="tag">ida pro</a>, <a class="tag" href="/tag/idapython/" rel="tag">idapython</a>, <a class="tag" href="/tag/reversing/" rel="tag">reversing</a>
+</p>
+
+<p>The EFI documentation defines a simplified version of the PE32 image format, called “TE”, which is intended to reduce the overheads of the PE/COFF headers. The document in which this format is defined can be found <a href="http://www.intel.com/content/dam/doc/reference-guide/efi-pei-cis-v091.pdf">here</a>. Apple’s EFI firmare (or at least one version I was looking at) uses the TE image format for the SEC phase binary, but IDA Pro doesn’t seem to understand TE, so I decided to have a crack at writing a loader to handle TE images. This post describes both a bit about the TE image format, and how to go about writing a basic image loader for IDA Pro in Python.</p>
+
+<p>First, a quick look at the TE image format. It is a stripped down version of PE32, so if you’re familiar with that then you’ll probably recognise these fields. The main image header looks something like this:</p>
+
+<pre><code class="language-c"><span class="k">typedef</span> <span class="k">struct</span> <span class="p">{</span>
+    <span class="n">UINT16</span>                   <span class="n">Signature</span><span class="p">;</span>
+    <span class="n">UINT16</span>                   <span class="n">Machine</span><span class="p">;</span>
+    <span class="n">UINT8</span>                    <span class="n">NumberOfSections</span><span class="p">;</span>
+    <span class="n">UINT8</span>                    <span class="n">Subsystem</span><span class="p">;</span>
+    <span class="n">UINT16</span>                   <span class="n">StrippedSize</span><span class="p">;</span>
+    <span class="n">UINT32</span>                   <span class="n">AddressOfEntryPoint</span><span class="p">;</span>
+    <span class="n">UINT32</span>                   <span class="n">BaseOfCode</span><span class="p">;</span>
+    <span class="n">UINT64</span>                   <span class="n">ImageBase</span><span class="p">;</span>
+    <span class="n">EFI_IMAGE_DATA_DIRECTORY</span> <span class="n">DataDirectory</span><span class="p">[</span><span class="mi">2</span><span class="p">];</span>
+<span class="p">}</span> <span class="n">TEImageHeader</span><span class="p">;</span></code></pre>
+
+<p>With the <code>EFI_IMAGE_DATA_DIRECTORY</code> structure looking like this:</p>
+
+<pre><code class="language-c"><span class="k">typedef</span> <span class="k">struct</span> <span class="p">{</span>
+    <span class="n">UINT32</span> <span class="n">VirtualAddress</span><span class="p">;</span>
+    <span class="n">UINT32</span> <span class="n">Size</span><span class="p">;</span>
+<span class="p">}</span> <span class="n">EFI_IMAGE_DATA_DIRECTORY</span><span class="p">;</span></code></pre>
+
+<p>Directly following the main header is a set of section headers (<code>NumberOfSections</code> of them, funnily enough) that look like this:</p>
+
+<pre><code class="language-c"><span class="k">typedef</span> <span class="k">struct</span><span class="p">{</span>
+    <span class="kt">char</span>    <span class="n">Name</span><span class="p">[</span><span class="mi">8</span><span class="p">];</span>
+    <span class="n">int32</span>   <span class="n">VirtualSize</span><span class="p">;</span> 
+    <span class="n">int32</span>   <span class="n">VirtualAddress</span><span class="p">;</span> 
+    <span class="n">int32</span>   <span class="n">SizeOfRawData</span><span class="p">;</span>   
+    <span class="n">int32</span>   <span class="n">PointerToRawData</span><span class="p">;</span>  
+    <span class="n">int32</span>   <span class="n">PointerToRelocations</span><span class="p">;</span>  
+    <span class="n">int32</span>   <span class="n">PointerToLinenumbers</span><span class="p">;</span> 
+    <span class="n">int16</span>   <span class="n">NumberOfRelocations</span><span class="p">;</span>   
+    <span class="n">int16</span>   <span class="n">NumberOfLinenumbers</span><span class="p">;</span> 
+    <span class="n">int32</span>   <span class="n">Characteristics</span><span class="p">;</span>  
+<span class="p">}</span> <span class="n">SectionHeader</span><span class="p">;</span></code></pre>
+
+<p>Following the section headers is the data for the sections.</p>
+
+<p>So, the first thing I did was put together a basic template for everybody’s favourite hex editor, <a href="http://www.sweetscape.com/010editor/">010 Editor</a>, using the structs defined above:</p>
+
+<pre><code class="language-c"><span class="n">local</span> <span class="n">int32</span> <span class="n">i</span><span class="p">;</span>
+
+<span class="k">typedef</span> <span class="n">UBYTE</span> <span class="n">UINT8</span><span class="p">;</span>
+
+<span class="c1">// insert those structs I defined above</span>
+
+<span class="k">struct</span> <span class="nf">SectionData</span> <span class="p">(</span><span class="kt">int</span> <span class="n">size</span><span class="p">)</span> <span class="p">{</span>
+    <span class="kt">char</span> <span class="n">data</span><span class="p">[</span><span class="n">size</span><span class="p">];</span>
+<span class="p">};</span>
+
+<span class="n">TEImageHeader</span> <span class="n">header</span><span class="p">;</span>
+<span class="n">SectionHeader</span> <span class="n">sec_header</span><span class="p">[</span><span class="n">header</span><span class="p">.</span><span class="n">NumberOfSections</span><span class="p">];</span>
+<span class="k">for</span> <span class="p">(</span><span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">header</span><span class="p">.</span><span class="n">NumberOfSections</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">SectionData</span> <span class="n">section</span><span class="p">(</span><span class="n">sec_header</span><span class="p">[</span><span class="n">i</span><span class="p">].</span><span class="n">SizeOfRawData</span><span class="p">);</span>
+<span class="p">}</span></code></pre>
+
+<p>This results in something that looks about right:</p>
+
+<p><img src="/posts/2012/12/010.png" alt="010dump"></p>
+
+<p>The next step was to rewrite it in Python, which went something like this:</p>
+
+<pre><code class="language-python"><span class="kn">import</span> <span class="nn">struct</span>
+<span class="kn">import</span> <span class="nn">sys</span>
+<span class="kn">import</span> <span class="nn">os</span>
+<span class="k">try</span><span class="p">:</span>
+    <span class="kn">from</span> <span class="nn">awesome_print</span> <span class="kn">import</span> <span class="n">ap</span> <span class="k">as</span> <span class="n">pp</span>
+<span class="k">except</span><span class="p">:</span>
+    <span class="kn">from</span> <span class="nn">pprint</span> <span class="kn">import</span> <span class="n">pprint</span> <span class="k">as</span> <span class="n">pp</span>
+
+<span class="k">class</span> <span class="nc">TEImage</span><span class="p">:</span>
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">f</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">offset</span> <span class="o">=</span> <span class="n">f</span><span class="o">.</span><span class="n">tell</span><span class="p">()</span>
+
+        <span class="c"># read header</span>
+        <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">signature</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">machine</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_sections</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">subsystem</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stripped_size</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">entry_point_addr</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">code_base</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">image_base</span><span class="p">)</span> <span class="o">=</span> <span class="n">struct</span><span class="o">.</span><span class="n">unpack</span><span class="p">(</span><span class="s">"&lt;HHBBHLLQ"</span><span class="p">,</span> <span class="n">f</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="mi">24</span><span class="p">))</span>
+        <span class="p">(</span><span class="n">d1</span><span class="p">,</span><span class="n">d2</span><span class="p">,</span><span class="n">d3</span><span class="p">,</span><span class="n">d4</span><span class="p">)</span> <span class="o">=</span> <span class="n">struct</span><span class="o">.</span><span class="n">unpack</span><span class="p">(</span><span class="s">"&lt;IIII"</span><span class="p">,</span> <span class="n">f</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="mi">16</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">data_dir</span> <span class="o">=</span> <span class="p">[(</span><span class="n">d1</span><span class="p">,</span><span class="n">d2</span><span class="p">),(</span><span class="n">d3</span><span class="p">,</span><span class="n">d4</span><span class="p">)]</span>
+
+        <span class="c"># read section table</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sections</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_sections</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">sections</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">TEImageSection</span><span class="p">(</span><span class="n">f</span><span class="p">))</span>
+
+<span class="k">class</span> <span class="nc">TEImageSection</span><span class="p">:</span>
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">f</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">offset</span> <span class="o">=</span> <span class="n">f</span><span class="o">.</span><span class="n">tell</span><span class="p">()</span>
+
+        <span class="c"># read header</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">name</span> <span class="o">=</span> <span class="n">f</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="mi">8</span><span class="p">)</span>
+        <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">virt_size</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">virt_addr</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">data_size</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">ptr_to_data</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">ptr_to_relocs</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">ptr_to_line_nums</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">num_relocs</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_line_nums</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">characteristics</span><span class="p">)</span> <span class="o">=</span> <span class="n">struct</span><span class="o">.</span><span class="n">unpack</span><span class="p">(</span><span class="s">"&lt;LLLLLLHHL"</span><span class="p">,</span> <span class="n">f</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="mi">32</span><span class="p">))</span>
+
+<span class="k">if</span> <span class="n">__name__</span> <span class="o">==</span> <span class="s">'__main__'</span><span class="p">:</span>
+    <span class="n">te</span> <span class="o">=</span> <span class="n">TEImage</span><span class="p">(</span><span class="nb">open</span><span class="p">(</span><span class="n">sys</span><span class="o">.</span><span class="n">argv</span><span class="p">[</span><span class="mi">1</span><span class="p">]))</span>
+    <span class="n">pp</span><span class="p">(</span><span class="n">te</span><span class="o">.</span><span class="n">__dict__</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">te</span><span class="o">.</span><span class="n">sections</span><span class="p">)):</span>
+        <span class="k">print</span> <span class="s">"section </span><span class="si">%i</span><span class="s">:"</span> <span class="o">%</span> <span class="n">i</span>
+        <span class="n">pp</span><span class="p">(</span><span class="n">te</span><span class="o">.</span><span class="n">sections</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="o">.</span><span class="n">__dict__</span><span class="p">)</span></code></pre>
+
+<p>Pretty self-explanatory - classes for the image and section headers using the <code>struct</code> module to unpack the headers, and the main section just creating an image object from whatever file was passed as the first argument and then prettyprinting the contents of the object.</p>
+
+<p>On my binary the output looks like this:</p>
+
+<pre><code>{
+         subsystem: 11,
+     stripped_size: 440,
+        image_base: 4294965344,
+          data_dir: [
+    [0] (
+      [0] 2048,
+      [1] 28
+    ),
+    [1] (
+      [0] 0,
+      [1] 0
+    )
+  ],
+  entry_point_addr: 1024,
+         code_base: 640,
+      num_sections: 5,
+            offset: 0,
+           machine: 332,
+         signature: 23126,
+          sections: [
+    [0] &lt;__main__.TEImageSection instance at 0x1058d3ab8&gt;,
+    [1] &lt;__main__.TEImageSection instance at 0x1058d3b48&gt;,
+    [2] &lt;__main__.TEImageSection instance at 0x1058d3b90&gt;,
+    [3] &lt;__main__.TEImageSection instance at 0x1058d3bd8&gt;,
+    [4] &lt;__main__.TEImageSection instance at 0x1058d3c20&gt;
+  ]
+}
+section 0:
+{
+              name: .text,
+        num_relocs: 0,
+   characteristics: 1610612768,
+  ptr_to_line_nums: 0,
+     num_line_nums: 0,
+         virt_addr: 640,
+       ptr_to_data: 640,
+            offset: 40,
+         virt_size: 359,
+         data_size: 384,
+     ptr_to_relocs: 0
+}
+section 1:
+{
+              name: _TEXT_RE,
+        num_relocs: 0,
+   characteristics: 1610612768,
+  ptr_to_line_nums: 0,
+     num_line_nums: 0,
+         virt_addr: 1024,
+       ptr_to_data: 1024,
+            offset: 80,
+         virt_size: 59,
+         data_size: 64,
+     ptr_to_relocs: 0
+}
+section 2:
+{
+              name: _TEXT_PR,
+        num_relocs: 0,
+   characteristics: 1610612768,
+  ptr_to_line_nums: 0,
+     num_line_nums: 0,
+         virt_addr: 1088,
+       ptr_to_data: 1088,
+            offset: 120,
+         virt_size: 920,
+         data_size: 928,
+     ptr_to_relocs: 0
+}
+section 3:
+{
+              name: .data,
+        num_relocs: 0,
+   characteristics: 3221225536,
+  ptr_to_line_nums: 0,
+     num_line_nums: 0,
+         virt_addr: 2016,
+       ptr_to_data: 2016,
+            offset: 160,
+         virt_size: 32,
+         data_size: 32,
+     ptr_to_relocs: 0
+}
+section 4:
+{
+              name: .reloc,
+        num_relocs: 0,
+   characteristics: 0,
+  ptr_to_line_nums: 0,
+     num_line_nums: 0,
+         virt_addr: 2048,
+       ptr_to_data: 2048,
+            offset: 200,
+         virt_size: 30,
+         data_size: 32,
+     ptr_to_relocs: 0
+}
+</code></pre>
+
+<p>Not pretty, but it looks like it’s doing the job.</p>
+
+<p>The final stage is to add the IDA loading code. IDA loaders can be implemented as fully fledged plugins with the SDK, or as IDC or IDAPython scripts. I obviously chose the last option, because who wouldn’t? IDA loaders rely on two functions: <code>accept_file()</code> and <code>load_file()</code>. <code>accept_file()</code> is called in every loader when a binary is opened in IDA, to ask the loader if it can load that type of file. All we have to do in this function is check the file’s magic number and make sure it looks like a TE binary:</p>
+
+<pre><code class="language-python"><span class="n">TE_MAGIC</span> <span class="o">=</span> <span class="s">"VZ"</span>
+
+<span class="k">def</span> <span class="nf">accept_file</span><span class="p">(</span><span class="n">f</span><span class="p">,</span> <span class="n">n</span><span class="p">):</span>
+    <span class="n">retval</span> <span class="o">=</span> <span class="mi">0</span>
+
+    <span class="k">if</span> <span class="n">n</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="n">f</span><span class="o">.</span><span class="n">seek</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">f</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span> <span class="o">==</span> <span class="n">TE_MAGIC</span><span class="p">:</span>
+            <span class="n">retval</span> <span class="o">=</span> <span class="s">"TE executable"</span>
+
+    <span class="k">return</span> <span class="n">retval</span></code></pre>
+
+<p>The <code>f</code> parameter here is an open file handle, and n is the number of times this loader has been queried so far (not really important for this type of loader). If it looks good, we return the string that will appear in IDA’s “Load a new file” window, otherwise return 0.</p>
+
+<p><code>load_file()</code> is where the good stuff happens. As the name indicates, this function is called by IDA to actually perform the loading of the file. Hurr.</p>
+
+<pre><code class="language-python"><span class="n">SECTION_CLASSES</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="n">b</span><span class="s">".text</span><span class="se">\0\0\0</span><span class="s">"</span><span class="p">:</span> <span class="s">"CODE"</span><span class="p">,</span>
+    <span class="n">b</span><span class="s">".data</span><span class="se">\0\0\0</span><span class="s">"</span><span class="p">:</span> <span class="s">"DATA"</span><span class="p">,</span>
+    <span class="n">b</span><span class="s">".reloc</span><span class="se">\0\0</span><span class="s">"</span><span class="p">:</span>  <span class="s">"DATA"</span><span class="p">,</span>
+    <span class="n">b</span><span class="s">"_TEXT_RE"</span><span class="p">:</span>    <span class="s">"CODE"</span><span class="p">,</span>
+    <span class="n">b</span><span class="s">"_TEXT_PR"</span><span class="p">:</span>    <span class="s">"CODE"</span>
+<span class="p">}</span>
+
+<span class="n">SECTION_MODES</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="n">b</span><span class="s">"_TEXT_RE"</span><span class="p">:</span>    <span class="mi">0</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="k">def</span> <span class="nf">load_file</span><span class="p">(</span><span class="n">f</span><span class="p">,</span> <span class="n">neflags</span><span class="p">,</span> <span class="n">format</span><span class="p">):</span>
+    <span class="c"># parse header</span>
+    <span class="n">f</span><span class="o">.</span><span class="n">seek</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">te</span> <span class="o">=</span> <span class="n">TEImage</span><span class="p">(</span><span class="n">f</span><span class="p">)</span>
+
+    <span class="c"># load binary</span>
+    <span class="k">for</span> <span class="n">sec</span> <span class="ow">in</span> <span class="n">te</span><span class="o">.</span><span class="n">sections</span><span class="p">:</span>
+        <span class="n">seg_type</span> <span class="o">=</span> <span class="n">SECTION_CLASSES</span><span class="p">[</span><span class="n">sec</span><span class="o">.</span><span class="n">name</span><span class="p">]</span> <span class="k">if</span> <span class="n">sec</span><span class="o">.</span><span class="n">name</span> <span class="ow">in</span> <span class="n">SECTION_CLASSES</span><span class="o">.</span><span class="n">keys</span><span class="p">()</span> <span class="k">else</span> <span class="s">"DATA"</span>
+        <span class="n">seg_mode</span> <span class="o">=</span> <span class="n">SECTION_MODES</span><span class="p">[</span><span class="n">sec</span><span class="o">.</span><span class="n">name</span><span class="p">]</span> <span class="k">if</span> <span class="n">sec</span><span class="o">.</span><span class="n">name</span> <span class="ow">in</span> <span class="n">SECTION_MODES</span><span class="o">.</span><span class="n">keys</span><span class="p">()</span> <span class="k">else</span> <span class="mi">1</span>
+        <span class="n">f</span><span class="o">.</span><span class="n">file2base</span><span class="p">(</span><span class="n">f</span><span class="o">.</span><span class="n">tell</span><span class="p">(),</span> <span class="n">sec</span><span class="o">.</span><span class="n">virt_addr</span><span class="p">,</span> <span class="n">sec</span><span class="o">.</span><span class="n">virt_addr</span> <span class="o">+</span> <span class="n">sec</span><span class="o">.</span><span class="n">data_size</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="n">add_segm</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">sec</span><span class="o">.</span><span class="n">virt_addr</span><span class="p">,</span> <span class="n">sec</span><span class="o">.</span><span class="n">virt_addr</span> <span class="o">+</span> <span class="n">sec</span><span class="o">.</span><span class="n">virt_size</span><span class="p">,</span> <span class="n">sec</span><span class="o">.</span><span class="n">name</span><span class="p">,</span> <span class="n">seg_type</span><span class="p">)</span>
+        <span class="n">set_segm_addressing</span><span class="p">(</span><span class="n">get_segm_by_name</span><span class="p">(</span><span class="n">sec</span><span class="o">.</span><span class="n">name</span><span class="p">),</span> <span class="n">seg_mode</span><span class="p">)</span>
+
+    <span class="n">add_entry</span><span class="p">(</span><span class="n">te</span><span class="o">.</span><span class="n">entry_point_addr</span><span class="p">,</span> <span class="n">te</span><span class="o">.</span><span class="n">entry_point_addr</span><span class="p">,</span> <span class="s">"_start"</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="mi">1</span></code></pre>
+
+<p>So we first use the classes we built earlier to parse the headers. Then for each section (segment) we need to determine the class (ie. whether it’s data or code or relocations or whatever), and the addressing mode (this is important because the entry point will be in 16-bit mode). Call <code>file2base()</code> to read the section’s data into IDA at the virtual address specified in the section header, <code>add_segm()</code> to create a segment of the appropriate type at this virtual address, and <code>set_segm_addressing()</code> to mark the segment as 16-bit if necessary. Once we’ve added all the segments into IDA we mark the entry point, and return 1 to tell IDA all is well.</p>
+
+<p>To install the loader, I just symlinked it into IDA’s loaders directory. On OS X this is actually inside the application bundle at <em>idaq.app/Contents/MacOS/loaders/</em> (idaq64.app looks inside idaq.app as well).</p>
+
+<p>Now when we open IDA and drop in our TE binary we get some good news:</p>
+
+<p><img src="/posts/2012/12/load.png" alt="load"></p>
+
+<p>The binary is processed and the <code>.text</code> segment looks OK:</p>
+
+<p><img src="/posts/2012/12/text.png" alt="text"></p>
+
+<p>And here’s the entry point in 16-bit mode, the first bit of code executed by the CPU when you power on the Mac:</p>
+
+<p><img src="/posts/2012/12/entry.png" alt="text"></p>
+
+<p>You can see it there loading the GDT, and enabling protected mode and SSE extensions before carrying on with the rest of the CPU init stuff. Good times.</p>
+
+<p>So there you go - a simple binary loader for IDA Pro in Python. I haven’t bothered implementing relocation fixups and whatnot yet, but I probably will at some stage. It’s 2:41am and I’m tired. The source code is in the <a href="https://github.com/snarez/ida-efiutils">ida-efiutils</a> package on Github.</p>
+
+  
+	<hr/>
+  
+
+  <h1><a href="/posts/2012/10/ruxcon/">Ruxcon 2012</a></h1>
+<p class="metadata">
+	Posted by snare on 23 October 2012. Tags: <a class="tag" href="/tag/efi/" rel="tag">efi</a>, <a class="tag" href="/tag/rootkits/" rel="tag">rootkits</a>
+</p>
+
+<p>I presented my research into EFI rootkits at Ruxcon 2012 in Melbourne, Australia on Saturday. You can find the slides right <a href="/downloads/De_Mysteriis_Dom_Jobsivs_Ruxcon.pdf">here</a>.</p>
+
+  
+	<hr/>
+  
+
+  <h1><a href="/posts/2012/09/ida-pro-scripts-for-efi-reversing/">IDA Pro scripts for EFI reversing</a></h1>
+<p class="metadata">
+	Posted by snare on 09 September 2012. Tags: <a class="tag" href="/tag/efi/" rel="tag">efi</a>, <a class="tag" href="/tag/ida pro/" rel="tag">ida pro</a>, <a class="tag" href="/tag/idapython/" rel="tag">idapython</a>, <a class="tag" href="/tag/reversing/" rel="tag">reversing</a>
+</p>
+
+<p>Reverse engineering EFI executables is a bit of a pain in the arse due to the way linking works with EFI. All EFI executables are statically linked, and there is no dynamic linking/loading in the traditional sense. Much of the core EFI functionality is exposed through several “tables” - the System Table, Boot Services Table and Runtime Services Table. These are just structs containing a bunch of pointers to functions and data that are accessed by executables running in the EFI environment. I won’t go further into the details of the tables - if you’re reading this you’re probably well across it already, but if not, check out the <a href="http://www.uefi.org/specs/">EFI spec</a>.</p>
+
+<p>When an EFI binary is executed by the DXE or BDS phase of boot, the binary is just loaded into memory and the entry point is <code>call</code>ed like any other function. The EFI System Table is passed as a parameter to the entry point function, along with a reference to the Image Handle, and the Boot Services and Runtime Services tables are retrieved from the System Table. From here, EFI functionality is accessed from within the executable by making calls to function pointers in the various tables - for example, the Boot Services function <code>AllocatePool()</code> for allocating memory on the heap.</p>
+
+<p>Since there are no references in the binary to external symbols, reversing an EFI binary becomes a bit more difficult. Calling a Boot Services function might look like this:</p>
+
+<pre><code>mov     rax, cs:qword_whatever
+call    qword ptr [rax+150h]
+</code></pre>
+
+<p>Not particularly useful. What we want to see is something more like this:</p>
+
+<pre><code>mov     rax, cs:gBootServices
+call    [rax+EFI_BOOT_SERVICES.UninstallMultipleProtocolInterfaces]
+</code></pre>
+
+<p>Manually changing all the references to EFI tables into struct offsets is painful, so I’ve written some IDAPython code to make it a bit easier. The Github repo is <a href="https://github.com/snarez/ida-efiutils">here</a>.</p>
+
+<p>The first task is finding global variables where the various EFI tables are stored. This can be done (for the few binaries I’ve tested with) by the <code>rename_tables()</code> function in <code>efiutils.py</code>. Once that’s done, the <code>update_structs()</code> function will find xrefs to these globals and rename any references to these structures.</p>
+
+<p>Before running the script, one binary (a free hug to the first person to tell me what it is) looked like this:</p>
+
+<p><img src="/posts/2012/09/ida_before.png" alt="Before"></p>
+
+<p>After, something much more useful:</p>
+
+<p><img src="/posts/2012/09/ida_after.png" alt="After"></p>
+
+<p>The next step in making EFI reversing easier is going to be locating and renaming function pointers within EFI protocol blocks. I guess I’ll get to it.</p>
+
+<p><strong>Update:</strong> OK, I’ve added searching for and renaming of GUIDs with the <code>rename_guids()</code> function.</p>
+
+<p>Before:</p>
+
+<p><img src="/posts/2012/09/ida_before_guid.png" alt="Before"></p>
+
+<p>After:</p>
+
+<p><img src="/posts/2012/09/ida_after_guid.png" alt="After"></p>
+
+<p>And we can see some of the protocol usage starting to take shape:</p>
+
+<p><img src="/posts/2012/09/ida_after_guid2.png" alt="After2"></p>
+
+<p>I extracted a pretty large list of guids (470 of them) from the TianoCore source, which should be found and renamed in any data(ish) segment in the binary.</p>
+
+  
+	<hr/>
+  
+
+  <h1><a href="/posts/2012/08/building-refind-with-edk2-on-osx/">Building rEFInd with EDKII on Mac OS X</a></h1>
+<p class="metadata">
+	Posted by snare on 13 August 2012. Tags: <a class="tag" href="/tag/efi/" rel="tag">efi</a>, <a class="tag" href="/tag/refind/" rel="tag">refind</a>
+</p>
+
+<p><a href="http://sourceforge.net/projects/refind/">rEFInd</a> is a fork of the <a href="http://sourceforge.net/projects/refit/">rEFIt</a> EFI boot manager. I ran into some issues building rEFInd on Mac OS X with the EDKII using the Makefile(s) provided by the author, which are intended to be used for building on Linux. A number of <code>gcc</code> and <code>ld</code> options used are incompatible with the Mac OS X toolchain. Rather than do the right thing and figure out what the appropriate options are, I’ve just dumped the rEFInd source into a new <em>Package</em> in the EDKII and added DSC and DEC files to get it to build on OS X.</p>
+
+<p>The build information files can be found on <a href="https://github.com/snarez/refind-edk2">github</a>.</p>
+
+<h2 id="building">Building</h2>
+
+<ul>
+  <li>
+    <p>Prepare and build your EDKII environment (outside of the scope of this document).</p>
+  </li>
+  <li>
+    <p>Clone the repository into the root directory of the EDKII.</p>
+
+    <pre><code>  $ cd /path/to/edk2
+  $ git clone https://github.com/snarez/refind-edk2.git RefindPkg
+</code></pre>
+  </li>
+  <li>
+    <p>Download the latest version of the <a href="http://sourceforge.net/projects/refind/files/">rEFInd source</a> into the RefindPkg directory and unpack it.</p>
+
+    <pre><code>  $ cd RefindPkg
+  $ wget http://downloads.sourceforge.net/project/refind/0.4.5/refind-src-0.4.5.zip
+  $ unzip refind-src-0.4.5.zip
+</code></pre>
+  </li>
+  <li>
+    <p>Create a symlink so that the path referred to in the DSC file makes sense.</p>
+
+    <pre><code>  $ ln -s refind-0.4.5 refind
+</code></pre>
+  </li>
+  <li>
+    <p>Build the package.</p>
+
+    <pre><code>  $ cd ..
+  $ source edksetup.sh
+  $ build -p RefindPkg/RefindPkg.dsc
+</code></pre>
+  </li>
+</ul>
+
+<p>This works for me on Mac OS X 10.7.4 with Xcode 4.4.1 and its command line tools. Drop me a line if you have any problems.</p>
+
+  
+	<hr/>
+  
+
+  <h1><a href="/posts/2012/07/black-hat-usa-2012/">Black Hat USA 2012</a></h1>
+<p class="metadata">
+	Posted by snare on 19 July 2012. Tags: <a class="tag" href="/tag/efi/" rel="tag">efi</a>, <a class="tag" href="/tag/rootkits/" rel="tag">rootkits</a>, <a class="tag" href="/tag/black hat/" rel="tag">black hat</a>
+</p>
+
+<p>Hello internet dudes. I am privileged to be presenting my EFI rootkit research at <a href="http://blackhat.com/html/bh-us-12/">Black Hat USA</a> this year in scorching Las Vegas. If you’re going to be at the conference come along and check out my talk on <a href="https://www.blackhat.com/html/bh-us-12/bh-us-12-briefings.html#K">Thursday July 26</a>, and/or hit me up on <a href="http://twitter.com/snare">twitter</a>. I’ll be in town for <a href="http://defcon.org">DEF CON</a> as well, of course.</p>
+
+<p>I’ll be talking about some of the same stuff that I talked about at SyScan - how EFI can be used in a Mac OS X rootkit, how the kernel payload can work, etc - but I’ll also be talking about and demonstrating a pretty sweet new attack, so stay tuned. I’ll upload the slides for the presentation and the white paper as soon as I’ve finished presenting and have had 2 beers.</p>
+
+<p><strong>Update</strong>: I tweeted the links to the materials shortly after my talk, but here they are: <a href="/downloads/De_Mysteriis_Dom_Jobsivs_Black_Hat_Slides.pdf">Slides</a> / <a href="/downloads/De_Mysteriis_Dom_Jobsivs_Black_Hat_Paper.pdf">Paper</a>.</p>
+
+  
+	<hr/>
+  
+
+  <h1><a href="/posts/2012/06/unbricking-a-macbook/">Un-bricking a MacBook</a></h1>
+<p class="metadata">
+	Posted by snare on 25 June 2012. Tags: <a class="tag" href="/tag/efi/" rel="tag">efi</a>, <a class="tag" href="/tag/firmware/" rel="tag">firmware</a>, <a class="tag" href="/tag/bus pirate/" rel="tag">bus pirate</a>, <a class="tag" href="/tag/flashrom/" rel="tag">flashrom</a>
+</p>
+
+<p>In my tinkering with EFI I attempted to flash some backdoored firmware to a test MacBook that was kindly donated to science by a friend of mine. This resulted in the bastard doing the S.O.S. beeps and not booting, and it didn’t seem to be recoverable using the Firmware Restore CDs from Apple. I decided that since it was dead anyway I might as well try and recover it by re-flashing the firmware manually using the nifty <a href="http://dangerousprototypes.com/docs/Bus_Pirate">Bus Pirate</a> that I impulse-bought not long ago, and a copy of <a href="http://flashrom.org">flashrom</a>.</p>
+
+<p>First things first - an appropriate beer:</p>
+
+<p><img src="/posts/2012/06/green_flash.jpg" alt="Beer"></p>
+
+<p>Next, I disassembled the MacBook with the help of the <a href="http://www.ifixit.com/Guide/Repair/MacBook-Core-2-Duo-Logic-Board/527/1">iFixit MacBook take apart guide</a> (wasn’t exactly the right model, but close enough). Here’s the remains of the machine after I removed the logic board:</p>
+
+<p><img src="/posts/2012/06/gut_shot.jpg" alt="Gut shot"></p>
+
+<p>I had to hunt around on the board a bit to find the flash that contains the EFI firmware, but knowing the model number from when I bricked it helped. Found it!</p>
+
+<p><img src="/posts/2012/06/flash_chip.jpg" alt="Flash chip"></p>
+
+<p>Now that I’d found the flash I had to wire up the Bus Pirate and hope the chip would be programmable in-circuit without any hassles:</p>
+
+<p><img src="/posts/2012/06/wired.jpg" alt="Wired"></p>
+
+<p>After a few false starts and some confusion with wiring between Bus Pirate versions, <code>flashrom</code> detected the chip:</p>
+
+<pre><code># flashrom -V -p buspirate_spi:dev=/dev/tty.usbserial-A800KC47
+flashrom v0.9.5.2-r1515 on Darwin 11.3.0 (x86_64), built with libpci 3.1.7, LLVM Clang 3.1 (tags/Apple/clang-318.0.58), little endian
+flashrom is free software, get the source code at http://www.flashrom.org
+
+Calibrating delay loop... OS timer resolution is 1 usecs, 1619M loops per second, 10 myus = 10 us, 100 myus = 101 us, 1000 myus = 1015 us, 10000 myus = 9863 us, 4 myus = 3 us, OK.
+Initializing buspirate_spi programmer
+SPI speed is 8MHz
+Raw bitbang mode version 1
+Raw SPI mode version 1
+The following protocols are supported: SPI.
+Probing for AMIC A25L05PT, 64 kB: RDID byte 0 parity violation. probe_spi_rdid_generic: id1 0x00, id2 0x00
+&lt;snip&gt;
+Probing for SST SST25VF016B, 2048 kB: probe_spi_rdid_generic: id1 0xbf, id2 0x2541
+Chip status register is 1c
+Chip status register: Block Protect Write Disable (BPL) is not set
+Chip status register: Auto Address Increment Programming (AAI) is not set
+Chip status register: Bit 5 / Block Protect 3 (BP3) is not set
+Chip status register: Bit 4 / Block Protect 2 (BP2) is set
+Chip status register: Bit 3 / Block Protect 1 (BP1) is set
+Chip status register: Bit 2 / Block Protect 0 (BP0) is set
+Chip status register: Write Enable Latch (WEL) is not set
+Chip status register: Write In Progress (WIP/BUSY) is not set
+Resulting block protection : all
+Found SST flash chip "SST25VF016B" (2048 kB, SPI) on buspirate_spi.
+Probing for SST SST25VF032B, 4096 kB: probe_spi_rdid_generic: id1 0xbf, id2 0x2541
+Found SST flash chip "SST25VF016B" (2048 kB, SPI).
+No operations were specified.
+Raw bitbang mode version 1
+Bus Pirate shutdown completed.
+</code></pre>
+
+<p>Looking good! So next I read back the dodgy firmware to make sure it looked like everything was working OK:</p>
+
+<pre><code># flashrom -V -p buspirate_spi:dev=/dev/tty.usbserial-A800KC47,spispeed=8M -r macbook_buspirate.rom
+&lt;snip&gt;
+Found SST flash chip "SST25VF016B" (2048 kB, SPI).
+Some block protection in effect, disabling
+Missing status register write definition, assuming EWSR is needed
+Reading flash... done.
+Raw bitbang mode version 1
+Bus Pirate shutdown completed.
+</code></pre>
+
+<p>This took a good half hour plus, maybe 45 minutes. Apparently there are some recent Bus Pirate speedups for <code>flashrom</code> but I didn’t wanna mess with it since it was working. A quick look at the firmware that was read back, and it looks OK compared to the original one that I read before flashing the dodgy one:</p>
+
+<pre><code># hexdump macbook_buspirate.rom|head -5
+0000000 00 00 00 00 00 00 00 00 bc e5 c8 87 00 00 00 00
+0000010 d9 54 93 7a 68 04 4a 44 81 ce 0b f6 17 d8 90 df
+0000020 00 00 19 00 00 00 00 00 5f 46 56 48 ff 8e ff ff
+0000030 48 00 fd de 00 00 00 01 19 00 00 00 00 00 01 00
+0000040 00 00 00 00 00 00 00 00 25 71 52 11 b2 78 3e 4d
+
+# hexdump dump_from_macbook.fd|head -5
+0000000 00 00 00 00 00 00 00 00 bc e5 c8 87 00 00 00 00
+0000010 d9 54 93 7a 68 04 4a 44 81 ce 0b f6 17 d8 90 df
+0000020 00 00 19 00 00 00 00 00 5f 46 56 48 ff 8e ff ff
+0000030 48 00 fd de 00 00 00 01 19 00 00 00 00 00 01 00
+0000040 00 00 00 00 00 00 00 00 25 71 52 11 b2 78 3e 4d
+</code></pre>
+
+<p>Time to write the original firmware back to the flash chip:</p>
+
+<pre><code># flashrom -V -p buspirate_spi:dev=/dev/tty.usbserial-A800KC47,spispeed=8M -w dump_from_macbook.fd
+flashrom v0.9.5.2-r1515 on Darwin 11.3.0 (x86_64), built with libpci 3.1.7, LLVM Clang 3.1 (tags/Apple/clang-318.0.58), little endian
+flashrom is free software, get the source code at http://www.flashrom.org
+
+Calibrating delay loop... OS timer resolution is 1 usecs, 1597M loops per second, 10 myus = 11 us, 100 myus = 100 us, 1000 myus = 1001 us, 10000 myus = 10081 us, 4 myus = 4 us, OK.
+Initializing buspirate_spi programmer
+SPI speed is 8MHz
+Raw bitbang mode version 1
+Raw SPI mode version 1
+The following protocols are supported: SPI.
+Probing for AMIC A25L05PT, 64 kB: RDID byte 0 parity violation. probe_spi_rdid_generic: id1 0x00, id2 0x00
+&lt;snip&gt;
+Found SST flash chip "SST25VF016B" (2048 kB, SPI).
+Some block protection in effect, disabling
+Missing status register write definition, assuming EWSR is needed
+Reading old flash chip contents... done.
+Erasing and writing flash chip... Trying erase function 0... 0x000000-0x000fff:S, 0x001000-0x001fff:S, 0x002000-0x002fff:S,
+&lt;snip&gt;
+0x1fe000-0x1fefff:S, 0x1ff000-0x1fffff:S
+Erase/write done.
+Verifying flash... VERIFIED.          
+Raw bitbang mode version 1
+Bus Pirate shutdown completed.
+</code></pre>
+
+<p>This took about 3 times as long as the read, as it had to read the flash back, erase the chip (which was pretty quick), write the new firmware, and then read the firmware back again to verify the write. After reassembling the machine:</p>
+
+<p><img src="/posts/2012/06/reassemble.jpg" alt="Reassemble"></p>
+
+<p>It booted first go! I was honestly pretty surprised that I didn’t destroy something. Unfortunately the screen backlight is broken (which is why it was donated to science in the first place), so it’s a bit hard to see that it still works:</p>
+
+<p><img src="/posts/2012/06/boot.jpg" alt="Boot"></p>
+
+<p><code>flashrom</code> rules. Bus Pirate rules.</p>
+
+  
+	<hr/>
+  
+
+  <h1><a href="/posts/2012/06/send-me-your-lspci/">Send me your `lspci -vv`</a></h1>
+<p class="metadata">
+	Posted by snare on 8 June 2012. Tags: <a class="tag" href="/tag/pci/" rel="tag">pci</a>, <a class="tag" href="/tag/efi/" rel="tag">efi</a>, <a class="tag" href="/tag/rootkits/" rel="tag">rootkits</a>
+</p>
+
+<p>Got an Mac? I need your help. I want to find out a bit more about the hardware that’s in various Intel Macs – specifically about built-in PCI devices with onboard expansion ROMs. You can help me out by sending me the output of <code>lspci -vv</code> on your Mac. The only catch is you need to install a kernel extension to do it. But don’t worry, it’s software written by the CoreBoot dudes! They’re trustworthy, I swear!</p>
+
+<p>EDIT2: I’ve had a couple of people having trouble building DirectHW. I’ve uploaded binaries <a href="/downloads/DirectHW.dmg">here</a> and <a href="/downloads/pciutils-3.1.7.dmg">here</a> if you don’t want to build/have trouble building from source (and trust me).</p>
+
+<p>The mission is dangerous, but if you’re ready, willing and able, this is what you need to do:</p>
+
+<pre><code>$ git clone http://review.coreboot.org/p/directhw.git
+Cloning into 'directhw'...
+
+remote: Counting objects: 59, done
+remote: Finding sources: 100% (59/59)
+remote: Total 59 (delta 16), reused 59 (delta 16)
+Unpacking objects: 100% (59/59), done.
+
+$ cd directhw/macosx
+$ make pciutils
+&lt;snip&gt;
+created: /path/to/directhw/macosx/pciutils-3.1.7.dmg
+Disk image done
+
+$ make directhw
+&lt;snip&gt;
+created: /path/to/directhw/macosx/DirectHW/DirectHW.dmg
+Disk image done
+</code></pre>
+
+<p>You’ll now have those two disk images created at the paths displayed at the end of the make processes. Install the packages in each of the DMGs, and then load the kernel extension:</p>
+
+<pre><code>$ sudo kextload /System/Library/Extensions/DirectHW.kext
+</code></pre>
+
+<p>EDIT: Oh I forgot, please turn off the energy saver setting (on laptops) to automatically switch graphics or whatever, so the non-integrated graphics card is powered on. You might need to log out and back in before it is powered on.</p>
+
+<p>And get me the sweet, sweet <code>lspci</code> goodies:</p>
+
+<pre><code>$ sudo lspci -vv
+00:00.0 Host bridge: Intel Corporation Device 0104 (rev 09)
+	Subsystem: Apple Computer Inc. Device 00dc
+	Control: I/O- Mem+ BusMaster+ SpecCycle- MemWINV- VGASnoop- ParErr- Stepping- SERR- FastB2B- DisINTx-
+	Status: Cap+ 66MHz- UDF- FastB2B+ ParErr- DEVSEL=fast &gt;TAbort- &lt;TAbort- &lt;MAbort+ &gt;SERR- &lt;PERR- INTx-
+	Latency: 0
+	Capabilities: [e0] Vendor Specific Information: Len=0c &lt;?&gt;
+&lt;snip&gt;
+</code></pre>
+
+<p>Including the model and hardware specs of the machine would be great too:</p>
+
+<pre><code>$ system_profiler SPHardwareDataType|grep -v UUID|grep -v Serial
+Hardware:
+
+Hardware Overview:
+
+  Model Name: iMac
+&lt;snip&gt;
+</code></pre>
+
+<p>Email me the results at snare [at] this domain, or pastebin/gist it and tweet it at me. I appreciate all the help I can get, thanks very much!</p>
+
+<p>If you don’t want this stuff to hang around on your machine you can <code>rm</code> the following stuff (gleaned from the <em>Archive.bom</em>s):</p>
+
+<pre><code>PCIUtils:
+/usr/include/pci
+/usr/include/pci/config.h
+/usr/include/pci/header.h
+/usr/include/pci/pci.h
+/usr/include/pci/types.h
+/usr/lib/libpci.a
+/usr/lib/pkgconfig
+/usr/lib/pkgconfig/libpci.pc
+/usr/sbin/lspci
+/usr/sbin/setpci
+/usr/sbin/update-pciids
+/usr/share/man/man7/pcilib.7
+/usr/share/man/man8/lspci.8
+/usr/share/man/man8/setpci.8
+/usr/share/man/man8/update-pciids.8
+/usr/share/pci.ids.gz
+
+DirectHW:
+/System/Library/Extensions/DirectHW.kext
+/System/Library/Frameworks/DirectHW.framework
+</code></pre>
+
+
+  
+	<hr/>
+  
+
+  <h1><a href="/posts/2012/05/syscan-2012-is-over/">SyScan 2012 is Over</a></h1>
+<p class="metadata">
+	Posted by snare on 1 May 2012. Tags: <a class="tag" href="/tag/syscan/" rel="tag">syscan</a>, <a class="tag" href="/tag/efi/" rel="tag">efi</a>, <a class="tag" href="/tag/rootkits/" rel="tag">rootkits</a>
+</p>
+
+<p>SyScan 2012 was a blast. I talked shit about EFI rootkits, which was pretty fun. My slides are uploaded <a href="/downloads/De_Mysteriis_Dom_Jobsivs_-_Syscan.pdf">here</a> if you’re interested.</p>
+
+<p>A couple of highlights for me were Brett Moore’s talk about process continuation (I’m kinda surprised IE didn’t crash spontaneously and ruin his demos), Alex Ionescu’s talk about ACPI 5.0 rootkits (Alex lost his laptop on the way over and had to rewrite his talk AND demos - still nailed it), and Stefan Esser’s talk about the iOS kernel heap (crossover with OS X kernel is very interesting to me). Oh and the chilli crab.</p>
+
+<p>I’ll definitely be making an effort to get over to Singapore for SyScan 2013. Thomas Lim knows how to put on a con/party.</p>
+
+  
+	<hr/>
+  
+
+  <h1><a href="/posts/2012/02/carving-up-efi-fat-binaries/">Carving up EFI fat binaries</a></h1>
+<p class="metadata">
+	Posted by snare on 24 February 2012. Tags: <a class="tag" href="/tag/efi/" rel="tag">efi</a>, <a class="tag" href="/tag/ida pro/" rel="tag">ida pro</a>, <a class="tag" href="/tag/python/" rel="tag">python</a>
+</p>
+
+<p>Apple uses a custom fat binary format so their EFI applications can contain both 32-bit and 64-bit sections. IDA Pro isn’t too keen on this format, and (last time I looked) won’t disassemble them unless you specify the starting offset for the architecture section you want to disassemble.</p>
+
+<p>The format is just a header that looks like this:</p>
+
+<pre><code class="language-c"><span class="k">typedef</span> <span class="k">struct</span> <span class="p">{</span>
+    <span class="n">UINT32</span> <span class="n">magic</span><span class="p">;</span>               <span class="c1">// Apple EFI fat binary magic number (0x0ef1fab9)</span>
+    <span class="n">UINT32</span> <span class="n">num_archs</span><span class="p">;</span>           <span class="c1">// number of architectures</span>
+    <span class="n">EFIFatArchHeader</span> <span class="n">archs</span><span class="p">[];</span>   <span class="c1">// architecture headers</span>
+<span class="p">}</span> <span class="n">EFIFatHeader</span><span class="p">;</span></code></pre>
+
+<p>Followed by some architecture headers that look like this:</p>
+
+<pre><code class="language-c"><span class="k">typedef</span> <span class="k">struct</span> <span class="p">{</span>
+    <span class="n">UINT32</span> <span class="n">cpu_type</span><span class="p">;</span>    <span class="c1">// probably 0x07 (CPU_TYPE_X86) or 0x01000007 (CPU_TYPE_X86_64)</span>
+    <span class="n">UINT32</span> <span class="n">cpu_subtype</span><span class="p">;</span> <span class="c1">// probably 3 (CPU_SUBTYPE_I386_ALL)</span>
+    <span class="n">UINT32</span> <span class="n">offset</span><span class="p">;</span>      <span class="c1">// offset to beginning of architecture section</span>
+    <span class="n">UINT32</span> <span class="n">size</span><span class="p">;</span>        <span class="c1">// size of arch section</span>
+    <span class="n">UINT32</span> <span class="n">align</span><span class="p">;</span>       <span class="c1">// alignment</span>
+<span class="p">}</span> <span class="n">EFIFatArchHeader</span><span class="p">;</span></code></pre>
+
+<p>Followed by the data for the sections.</p>
+
+<p>I wrote a quick bit of python early last year to parse the headers and split the fat binaries into their single architecture sections and thought someone might find it useful. It’s on my <a href="http://github.com/snarez/efitools">github</a>. I’ve got a couple of other half finished EFI-related scripts that I’ll add to that repo soon, when they are a bit more useful.</p>
+
+<p>Running <code>efi_lipo.py</code>:</p>
+
+<pre><code>$ ./efi_lipo.py SmcFlasher.efi 
+processing 'SmcFlasher.efi'
+this is an EFI fat binary with 2 architectures
+architecture 0 (X86):
+  offset: 0x30
+  size:   0x8bd0
+architecture 1 (X64):
+  offset: 0x8c00
+  size:   0x9e70
+saving X86 section to 'SmcFlasher.efi.X86'
+saving X64 section to 'SmcFlasher.efi.X64'
+</code></pre>
+
+<p>It might have been better to write an IDA Python script to do it instead, maybe I’ll do that at some stage, but this does the job for now.</p>
+
+<p>The <a href="http://refit.sourceforge.net/info/fat_binary.html">rEFIt</a> site has some good info on the data structure layout, as does <a href="http://wiki.awkwardtv.org/wiki/Boot.efi_Information">awkwardTV</a>.</p>
+
+  
+	<hr/>
+  
+
+  <h1><a href="/posts/2012/02/vmware-hardware-debugging/">VMware debugging II&#58; "Hardware" debugging</a></h1>
+<p class="metadata">
+	Posted by snare on 18 February 2012. Tags: <a class="tag" href="/tag/mac os x/" rel="tag">mac os x</a>, <a class="tag" href="/tag/kernel/" rel="tag">kernel</a>, <a class="tag" href="/tag/debugging/" rel="tag">debugging</a>, <a class="tag" href="/tag/vmware/" rel="tag">vmware</a>, <a class="tag" href="/tag/efi/" rel="tag">efi</a>, <a class="tag" href="/tag/gdb/" rel="tag">gdb</a>
+</p>
+
+<p>A few days ago I wrote an <a href="/posts/2012/02/debugging-the-mac-os-x-kernel-with-vmware-and-gdb/">article</a> about debugging the OS X kernel with VMware and GDB, using Apple’s Kernel Debugger Protocol (KDP). There is another method of debugging XNU that is worth mentioning - VMware Fusion’s built in debug server. This is the virtual equivalent of a hardware debugger on a physical machine. According to a VMware engineer:</p>
+
+<blockquote>
+  <p>… when you stop execution, all cores are halted, the guest doesn’t even know that time has stopped, and you can happily single-step interrupt handlers, exceptions, etc.</p>
+</blockquote>
+
+<p>This is pretty awesome, and has a few advantages over KDP:</p>
+
+<ul>
+  <li>It’s easier to break into the debugger - you can use the normal <code>^C</code> method from the GDB session, rather than having to either insert <code>int 3</code>’s into your code or insert breakpoints on predictable function calls like <code>kext_alloc()</code> when you attach the debugger at boot time.</li>
+  <li>It’s faster - KDP works over UDP and seems to have a few timing issues where it drops packets or the target kernel doesn’t respond in time (particularly in the more complex <code>kgmacros</code> commands), whereas the VMware debug stub seems to be substantially faster and (so far) more reliable.</li>
+  <li>You can debug anything from the time the VM is powered on - this means that you can debug non-<code>DEBUG</code> XNU kernels, along with EFI stuff, the bootloader (<code>boot.efi</code>), whatever you want.</li>
+</ul>
+
+<h2 id="vmware-setup">VMware setup</h2>
+
+<p>Getting this going is pretty easy, it just requires a couple of config options to be added to the <code>.vmx</code> file for your virtual machine. For example, if you have a VM called <em>Lion.vmwarevm</em> there’ll be a file inside called <em>Lion.vmx</em> which contains the configuration for the VM. Add the following lines (while the VM is not running):</p>
+
+<pre><code>debugStub.listen.guest32 = "TRUE"
+debugStub.listen.guest64 = "TRUE"
+</code></pre>
+
+<p>The debug stub listens on the loopback interface on the Mac OS X host OS on which Fusion is running. If you want to debug from another machine (or VM) you need to enable the ‘remote’ listener in the <code>.vmx</code> file instead of (or as well as) the local listener:</p>
+
+<pre><code>debugStub.listen.guest32.remote = "TRUE"
+debugStub.listen.guest64.remote = "TRUE"
+</code></pre>
+
+<p>Using this method you can connect to the debug stub from an instance of the FSF version of GDB on a Linux box.</p>
+
+<p>That’s it, start up the VM. If you’re using a VM with a <code>DEBUG</code> kernel and you’ve set the <code>boot-args</code> variable in NVRAM to contain <code>debug=0x1</code>, as per the <a href="/posts/2012/02/debugging-the-mac-os-x-kernel-with-vmware-and-gdb/">previous article</a>, you will need to attach another instance of GDB via KDP at this point and <code>continue</code> in that instance to let the boot process finish.</p>
+
+<h2 id="gdb">GDB</h2>
+
+<p>I’ve found that if you try to connect to the debug stub without loading a file to debug you get errors like this:</p>
+
+<pre><code class="language-gdb">[New thread <span class="mh">1</span>]
+Remote register badly formatted: T<span class="mh">05</span>thread:<span class="mh">00000001</span>;<span class="mh">06</span>:<span class="mh">10</span>d<span class="mh">3</span>fc<span class="mh">7</span>f<span class="mh">00000000</span>;<span class="mh">07</span>:c<span class="mh">0</span>d<span class="mh">2</span>fc<span class="mh">7</span>f<span class="mh">00000000</span>;<span class="mh">10</span>:<span class="mh">8</span>a<span class="mh">18</span>a<span class="mh">07</span>d<span class="mh">00000000</span>;
+here: <span class="mh">0000000</span>;<span class="mh">07</span>:c<span class="mh">0</span>d<span class="mh">2</span>fc<span class="mh">7</span>f<span class="mh">00000000</span>;<span class="mh">10</span>:<span class="mh">8</span>a<span class="mh">18</span>a<span class="mh">07</span>d<span class="mh">00000000</span>;</code></pre>
+
+<p>So start up GDB with whatever you’re intending to debug. In this example, the <code>DEBUG</code> kernel that is installed on the VM:</p>
+
+<pre><code class="language-gdb">$ gdb /Volumes/KernelDebugKit/DEBUG_Kernel/mach_kernel</code></pre>
+
+<p>If you’re debugging a 32-bit VM on a 64-bit machine, you’ll need to set the architecture:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">set</span> architecture i<span class="mh">386</span></code></pre>
+
+<p>Or, if you are debugging 64-bit on 64-bit and have trouble connecting to the debug stub, you may need to explicitly set it to 64-bit:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">set</span> architecture i<span class="mh">386</span>:x<span class="mh">86</span>-<span class="mh">64</span></code></pre>
+
+<p>If you’re debugging a 64-bit VM, connect to the 64-bit debug stub:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">target</span> remote localhost:<span class="mh">8864</span></code></pre>
+
+<p>Or the 32-bit debug stub for a 32-bit VM:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">target</span> remote localhost:<span class="mh">8832</span></code></pre>
+
+<p>At this point you should be connected to the debug stub, and the VM should be paused. You’ll see a dark translucent version of the ‘play’ button used to start the VM on the VM console (indicating the VM is paused and the debugger has control), and something like this in GDB:</p>
+
+<pre><code class="language-gdb">[New thread <span class="mh">1</span>]
+warning: Error <span class="mh">268435459</span> getting port names from mach_port_names
+[Switching to process <span class="mh">1</span> thread <span class="mh">0x0</span>]
+<span class="mh">0xffffff80008bf4c2</span> in tweak_crypt_group ()
+gdb$</code></pre>
+
+<p><code>tweak_crypt_group()</code> - heh. My VM is encrypting its disk at the moment.</p>
+
+<p>Now you’re in familiar territory:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">source</span> /Volumes/KernelDebugKit/kgmacros 
+Loading Kernel GDB Macros package.  Type <span class="s">"help kgm"</span> for more info.
+<span class="kt">gdb$</span> <span class="nb">bt</span>
+#<span class="mh">0</span>  <span class="mh">0xffffff7f817315b4</span> in ?? ()
+#<span class="mh">1</span>  <span class="mh">0xffffff7f8172343e</span> in ?? ()
+#<span class="mh">2</span>  <span class="mh">0xffffff7f81724f68</span> in ?? ()
+#<span class="mh">3</span>  <span class="mh">0xffffff8000379b18</span> in machine_idle () at pmCPU.c:<span class="mh">107</span>
+#<span class="mh">4</span>  <span class="mh">0xffffff800025c357</span> in processor_idle (thread<span class="o">=</span><span class="mh">0xffffff8008712b80</span>, processor<span class="o">=</span><span class="mh">0xffffff8000c9be20</span>) at sched_prim.c:<span class="mh">3928</span>
+#<span class="mh">5</span>  <span class="mh">0xffffff8000257060</span> in thread_select_idle (thread<span class="o">=</span><span class="mh">0xffffff8008712b80</span>, processor<span class="o">=</span><span class="mh">0xffffff8000c9be20</span>) at sched_prim.c:<span class="mh">1793</span>
+#<span class="mh">6</span>  <span class="mh">0xffffff8000256d8e</span> in thread_select (thread<span class="o">=</span><span class="mh">0xffffff8008712b80</span>, processor<span class="o">=</span><span class="mh">0xffffff8000c9be20</span>) at sched_prim.c:<span class="mh">1728</span>
+#<span class="mh">7</span>  <span class="mh">0xffffff8000258bbf</span> in thread_block_reason (continuation<span class="o">=</span><span class="mh">0xffffff8000227270</span> <span class="nf">&lt;ipc_mqueue_receive_continue&gt;</span>, parameter<span class="o">=</span><span class="mh">0x0</span>, reason<span class="o">=</span><span class="mh">0x0</span>) at sched_prim.c:<span class="mh">2396</span>
+#<span class="mh">8</span>  <span class="mh">0xffffff8000258cbc</span> in thread_block (continuation<span class="o">=</span><span class="mh">0xffffff8000227270</span> <span class="nf">&lt;ipc_mqueue_receive_continue&gt;</span>) at sched_prim.c:<span class="mh">2415</span>
+#<span class="mh">9</span>  <span class="mh">0xffffff8000227357</span> in ipc_mqueue_receive (mqueue<span class="o">=</span><span class="mh">0xffffff8008854728</span>, option<span class="o">=</span><span class="mh">0x7000006</span>, max_size<span class="o">=</span><span class="mh">0xc00</span>, rcv_timeout<span class="o">=</span><span class="mh">0xffffffff</span>, interruptible<span class="o">=</span><span class="mh">0x2</span>) at ipc_mqueue.c:<span class="mh">698</span>
+#<span class="mh">10</span> <span class="mh">0xffffff8000237542</span> in mach_msg_overwrite_trap (args<span class="o">=</span><span class="mh">0xffffff800872b804</span>) at mach_msg.c:<span class="mh">528</span>
+#<span class="mh">11</span> <span class="mh">0xffffff80002375b4</span> in mach_msg_trap (args<span class="o">=</span><span class="mh">0xffffff800872b804</span>) at mach_msg.c:<span class="mh">554</span>
+#<span class="mh">12</span> <span class="mh">0xffffff8000354a01</span> in mach_call_munger<span class="mh">64</span> (state<span class="o">=</span><span class="mh">0xffffff800872b800</span>) at bsd_i<span class="mh">386</span>.c:<span class="mh">534</span>
+<span class="kt">gdb$</span> <span class="nb">showalltasks</span>
+task                vm_map              ipc_space          #acts   pid  process             io_policy    wq_state   command
+<span class="mh">0xffffff80067ac938</span>  <span class="mh">0xffffff800249ee98</span>  <span class="mh">0xffffff80066ebdb0</span>    <span class="mh">60</span>     <span class="mh">0</span>  <span class="mh">0xffffff8000cb4c20</span>                          kernel_task
+<span class="mh">0xffffff80067ac5a0</span>  <span class="mh">0xffffff800249e200</span>  <span class="mh">0xffffff80066ebd10</span>     <span class="mh">3</span>     <span class="mh">1</span>  <span class="mh">0xffffff8007576820</span>                          launchd
+<span class="mh">0xffffff80067ac208</span>  <span class="mh">0xffffff800249e010</span>  <span class="mh">0xffffff80066ebc70</span>     <span class="mh">1</span>     <span class="mh">2</span>  <span class="mh">0xffffff80075763d0</span>                          launchctl
+<span class="mh">0xffffff80067ab740</span>  <span class="mh">0xffffff800249e108</span>  <span class="mh">0xffffff80066eba90</span>     <span class="mh">3</span>    <span class="mh">10</span>  <span class="mh">0xffffff80075756e0</span>                <span class="mh">2</span>  <span class="mh">1</span>  <span class="mh">0</span>   kextd
+<span class="mh">0xffffff80067abe70</span>  <span class="mh">0xffffff8007003568</span>  <span class="mh">0xffffff80066ebbd0</span>     <span class="mh">3</span>    <span class="mh">11</span>  <span class="mh">0xffffff8007575f80</span>                <span class="mh">1</span>  <span class="mh">0</span>  <span class="mh">0</span>   UserEventAgent
+<span class="mh">0xffffff80067abad8</span>  <span class="mh">0xffffff8007e692f8</span>  <span class="mh">0xffffff80066ebb30</span>     <span class="mh">3</span>    <span class="mh">12</span>  <span class="mh">0xffffff8007575b30</span>                <span class="mh">1</span>  <span class="mh">0</span>  <span class="mh">0</span>   mDNSResponder
+<span class="cs">&lt;snip&gt;</span></code></pre>
+
+<p>Don’t forget you can just <code>^C</code> to drop back into the debuggger just like back in the good old userland days:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">c</span>
+^C
+Program received signal SIGINT, Interrupt.
+<span class="mh">0xffffff7f817315b4</span> in ?? ()
+<span class="kt">gdb$</span> <span class="nb">bt</span>
+#<span class="mh">0</span>  <span class="mh">0xffffff7f817315b4</span> in ?? ()
+#<span class="mh">1</span>  <span class="mh">0xffffff7f8172343e</span> in ?? ()
+#<span class="mh">2</span>  <span class="mh">0xffffff7f81724f68</span> in ?? ()
+#<span class="mh">3</span>  <span class="mh">0xffffff8000379b18</span> in machine_idle () at pmCPU.c:<span class="mh">107</span>
+#<span class="mh">4</span>  <span class="mh">0xffffff800025c357</span> in processor_idle (thread<span class="o">=</span><span class="mh">0xffffff8008712b80</span>, processor<span class="o">=</span><span class="mh">0xffffff8000c9be20</span>) at sched_prim.c:<span class="mh">3928</span>
+<span class="cs">&lt;snip&gt;</span></code></pre>
+
+<p>Enjoy.</p>
+
+  
+	<hr/>
+  
+
+              </div>
+            </div>
+            <div class="grid_3">
+              <div id="sidebar">
+                <h2>PAGES</h2>
+                <ul>
+                  <li><a href="/">Home</a></li>
+                  <li><a href="/about">About</a></li>
+                  <li><a href="/downloads">Downloads</a></li>
+                </ul>
+                <h2>TAGS</h2>
+                <p><a class="tagcloud" style="font-size:78.23529411764706%;" href="/tag/voltron/" rel="tag">voltron</a> <a class="tagcloud" style="font-size:85.29411764705883%;" href="/tag/debugging/" rel="tag">debugging</a> <a class="tagcloud" style="font-size:85.29411764705883%;" href="/tag/gdb/" rel="tag">gdb</a> <a class="tagcloud" style="font-size:64.11764705882352%;" href="/tag/lldb/" rel="tag">lldb</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/calculon/" rel="tag">calculon</a> <a class="tagcloud" style="font-size:120.58823529411765%;" href="/tag/efi/" rel="tag">efi</a> <a class="tagcloud" style="font-size:71.17647058823529%;" href="/tag/ida pro/" rel="tag">ida pro</a> <a class="tagcloud" style="font-size:64.11764705882352%;" href="/tag/idapython/" rel="tag">idapython</a> <a class="tagcloud" style="font-size:64.11764705882352%;" href="/tag/reversing/" rel="tag">reversing</a> <a class="tagcloud" style="font-size:85.29411764705883%;" href="/tag/rootkits/" rel="tag">rootkits</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/refind/" rel="tag">refind</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/black hat/" rel="tag">black hat</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/firmware/" rel="tag">firmware</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/bus pirate/" rel="tag">bus pirate</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/flashrom/" rel="tag">flashrom</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/pci/" rel="tag">pci</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/syscan/" rel="tag">syscan</a> <a class="tagcloud" style="font-size:78.23529411764706%;" href="/tag/mac os x/" rel="tag">mac os x</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/x86-64/" rel="tag">x86-64</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/clang/" rel="tag">clang</a> <a class="tagcloud" style="font-size:71.17647058823529%;" href="/tag/kernel/" rel="tag">kernel</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/kexts/" rel="tag">kexts</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/mach-o/" rel="tag">mach-o</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/python/" rel="tag">python</a> <a class="tagcloud" style="font-size:64.11764705882352%;" href="/tag/vmware/" rel="tag">vmware</a> </p>
+                <h2>POSTS</h2>
+                <ul>
+                  
+                    <li><a href="/posts/2015/05/building-voltron-command-plugins/">Building Voltron Command Plugins</a></li>
+                  
+                    <li><a href="/posts/2014/12/building-voltron-views/">Building Voltron Views</a></li>
+                  
+                    <li><a href="/posts/2013/10/calculon-a-calculator-for-nerds/">Calculon - a calculator for nerds</a></li>
+                  
+                    <li><a href="/posts/2013/06/voltron-a-hacky-ui-for-gdb/">Voltron - a hacky UI for GDB</a></li>
+                  
+                    <li><a href="/posts/2012/12/te-loader-for-ida-pro/">TE loader for IDA Pro</a></li>
+                  
+                    <li><a href="/posts/2012/10/ruxcon/">Ruxcon 2012</a></li>
+                  
+                    <li><a href="/posts/2012/09/ida-pro-scripts-for-efi-reversing/">IDA Pro scripts for EFI reversing</a></li>
+                  
+                    <li><a href="/posts/2012/08/building-refind-with-edk2-on-osx/">Building rEFInd with EDKII on Mac OS X</a></li>
+                  
+                    <li><a href="/posts/2012/07/black-hat-usa-2012/">Black Hat USA 2012</a></li>
+                  
+                    <li><a href="/posts/2012/06/unbricking-a-macbook/">Un-bricking a MacBook</a></li>
+                  
+                    <li><a href="/posts/2012/06/send-me-your-lspci/">Send me your `lspci -vv`</a></li>
+                  
+                    <li><a href="/posts/2012/05/syscan-2012-is-over/">SyScan 2012 is Over</a></li>
+                  
+                    <li><a href="/posts/2012/03/rip-relative-addressing-and-kernel-payloads/">RIP-Relative Addressing and Kernel Payloads</a></li>
+                  
+                    <li><a href="/posts/2012/02/resolving-kernel-symbols/">Resolving kernel symbols</a></li>
+                  
+                    <li><a href="/posts/2012/02/carving-up-efi-fat-binaries/">Carving up EFI fat binaries</a></li>
+                  
+                    <li><a href="/posts/2012/02/vmware-hardware-debugging/">VMware debugging II&#58; "Hardware" debugging</a></li>
+                  
+                    <li><a href="/posts/2012/02/debugging-the-mac-os-x-kernel-with-vmware-and-gdb/">Debugging the Mac OS X kernel with VMware and GDB</a></li>
+                  
+                </ul>
+                <h2>SEARCH</h2>
+                <form method="get" action="http://www.google.com/search">
+                  <fieldset>
+                    <input type="hidden" name="sitesearch" value="ho.ax"/>
+                    <input type="text" class="searchbox" name="q" size="31" maxlength="255" value=""/>
+                    <input type="image" class="searchbutton" width=24 height=24 src="/img/search.png" value="Search"/>
+                  </fieldset>
+                </form>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="splitbar">&nbsp;</div>
+      <div id="footer">
+          <div class="container_12">
+            <div class="grid_9">
+              <p>Last updated on 9 May 2015 by . Please don't steal my stuff.</p>
+            </div>
+            <div class="grid_3">
+              <div class="media">
+                <div style="float: left"><a class="twitter" href="http://twitter.com/snare"></a></div>
+                <div style="float: left"><a class="rss" href="/feed.xml"></a></div>
+              </div>
+            </div>
+        </div>
+      </div>
+    </div>
+  <script type="text/javascript">
+
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-29183428-1']);
+  _gaq.push(['_trackPageview']);
+
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+
+  </script>
+  <img src="/img/twitter_active.png" style="display: none" />
+  <img src="/img/rss_active.png" style="display: none" />
+  </body>
+</html>

@@ -1,0 +1,466 @@
+<!DOCTYPE HTML>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>ho.ax - Building Voltron Views</title>
+    <link rel="stylesheet" type="text/css" href="/css/reset.css" media="screen">
+    <link rel="stylesheet" type="text/css" href="/css/grid.css" media="screen">
+    <link rel="stylesheet" type="text/css" href="/css/style.css" media="screen">
+    <link rel="stylesheet" type="text/css" href="/css/highlight.css" media="screen">
+    <link rel="alternate" type="application/rss+xml" title="RSS" href="http://ho.ax/feed.xml">
+  </head>
+  <body>
+      <div id="container">
+        <div id="header">
+          <div class="container_12">
+            <div class="grid_6">
+              <h1><a href="/">ho/ax.</a></h1>
+            </div>
+            <div class="grid_6">
+              <div class="media">
+                <div style="float: left"><a class="twitter" href="http://twitter.com/snare"></a></div>
+                <div style="float: left"><a class="rss" href="/feed.xml"></a></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div id="splitbar">&nbsp;</div>
+        <div id="main">
+          <div class="container_12">
+            <div class="grid_9">
+              <div id="content">
+                <h1><a href="/posts/2014/12/building-voltron-views/">Building Voltron Views</a></h1>
+<p class="metadata">
+	Posted by snare on 20 December 2014. Tags: <a class="tag" href="/tag/voltron/" rel="tag">voltron</a>, <a class="tag" href="/tag/debugging/" rel="tag">debugging</a>, <a class="tag" href="/tag/gdb/" rel="tag">gdb</a>, <a class="tag" href="/tag/lldb/" rel="tag">lldb</a>
+</p>
+
+<p>In <a href="/posts/2013/06/voltron-a-hacky-ui-for-gdb/">2013</a> I released a small debugger UI tool called <a href="https://github.com/snare/voltron">Voltron</a>. In the last few months I completely rewrote the guts of it to be much more extensible, and gave a short talk at <a href="https://www.kiwicon.org/the-con/talks/#e163">Kiwicon 8</a> on it, so I figured it was about time for an update. This post will take you through building new Voltron views for your own purposes.</p>
+
+<p>Some of the information in this blog post is covered in the documentation on the <a href="https://github.com/snare/voltron/wiki/">wiki</a>.</p>
+
+<p>Note: I’m using LLDB in this post, but you can use GDB and it will be much the same.</p>
+
+<h2 id="poking-around-in-the-repl">Poking around in the REPL</h2>
+
+<p>Whenever I write Python I spend a lot of time poking around in classes in a REPL, often in lieu of actually consulting the documentation, so that seems like a good place to start.</p>
+
+<p>First off let’s fire up LLDB with an inferior, initialise Voltron, set a breakpoint and run the executable so we have some useful debugger state to poke at. I’m using the test inferior from the Voltron package, but use whatever.</p>
+
+<pre><code>$ lldb tests/inferior
+Voltron loaded.
+Run `voltron init` after you load a target.
+Current executable set to 'tests/inferior' (x86_64).
+(lldb) voltron init
+Registered stop-hook
+(lldb) b main
+Breakpoint 1: where = inferior`main, address = 0x0000000100000cf0
+(lldb) run
+Process 16669 launched: '~/code/voltron/repo/tests/inferior' (x86_64)
+Process 16669 stopped
+* thread #1: tid = 0x1a2238, 0x0000000100000cf0 inferior`main, queue = 'com.apple.main-thread', stop reason = breakpoint 1.1
+    frame #0: 0x0000000100000cf0 inferior`main
+inferior`main:
+-&gt; 0x100000cf0:  push   rbp
+   0x100000cf1:  mov    rbp, rsp
+   0x100000cf4:  sub    rsp, 0x50
+   0x100000cf8:  mov    dword ptr [rbp - 0x4], 0x0
+(lldb)
+</code></pre>
+
+<p>Now load up a Python REPL in another terminal (I use <a href="http://bpython-interpreter.org/">bpython</a>) and import the Voltron package. We can then instantiate a Voltron client object, connect to the Voltron server running in the debugger, and issue API requests.</p>
+
+<pre><code class="language-python"><span class="o">&gt;&gt;&gt;</span> <span class="kn">import</span> <span class="nn">voltron</span>
+<span class="o">&gt;&gt;&gt;</span> <span class="kn">from</span> <span class="nn">voltron.core</span> <span class="kn">import</span> <span class="n">Client</span>
+<span class="o">&gt;&gt;&gt;</span> <span class="n">client</span> <span class="o">=</span> <span class="n">Client</span><span class="p">()</span>
+<span class="o">&gt;&gt;&gt;</span> <span class="n">client</span><span class="o">.</span><span class="n">connect</span><span class="p">()</span>
+<span class="o">&gt;&gt;&gt;</span> <span class="n">client</span><span class="o">.</span><span class="n">perform_request</span><span class="p">(</span><span class="s">'state'</span><span class="p">)</span>
+<span class="o">&lt;&lt;</span><span class="k">class</span> <span class="err">'</span><span class="nc">state</span><span class="o">.</span><span class="n">APIStateResponse</span><span class="s">'&gt;: success = True, error = False, body: {'</span><span class="n">status</span><span class="s">': u'</span><span class="n">success</span><span class="s">', '</span><span class="n">state</span><span class="s">': u'</span><span class="n">stopped</span><span class="s">', '</span><span class="nb">type</span><span class="s">': u'</span><span class="n">response</span><span class="s">'}&gt;</span></code></pre>
+
+<p>The <code>perform_request()</code> function creates an API request of the specified type with the given parameters (none in this case), sends it to the server, and returns an instance of a subclass of <code>APIResponse</code> containing the response. In this example we’ve queried the state of the debugger and can see that the request was successful, and that the debugger is stopped.</p>
+
+<p>Now let’s try getting the contents of a register, say <code>RSP</code>, with the <code>registers</code> API method:</p>
+
+<pre><code class="language-python"><span class="o">&gt;&gt;&gt;</span> <span class="n">res</span> <span class="o">=</span> <span class="n">client</span><span class="o">.</span><span class="n">perform_request</span><span class="p">(</span><span class="s">'registers'</span><span class="p">,</span> <span class="n">registers</span><span class="o">=</span><span class="p">[</span><span class="s">'rsp'</span><span class="p">])</span>
+<span class="o">&gt;&gt;&gt;</span> <span class="n">res</span><span class="o">.</span><span class="n">is_success</span>
+<span class="bp">True</span>
+<span class="o">&gt;&gt;&gt;</span> <span class="n">res</span><span class="o">.</span><span class="n">registers</span>
+<span class="p">{</span><span class="s">u'rsp'</span><span class="p">:</span> <span class="mi">140734799804616</span><span class="p">}</span></code></pre>
+
+<p>Now we’ll read some memory from the inferior’s stack using the value of the stack pointer register we just got:</p>
+
+<pre><code class="language-python"><span class="o">&gt;&gt;&gt;</span> <span class="n">rsp</span> <span class="o">=</span> <span class="n">res</span><span class="o">.</span><span class="n">registers</span><span class="p">[</span><span class="s">'rsp'</span><span class="p">]</span>
+<span class="o">&gt;&gt;&gt;</span> <span class="n">res</span> <span class="o">=</span> <span class="n">client</span><span class="o">.</span><span class="n">perform_request</span><span class="p">(</span><span class="s">'memory'</span><span class="p">,</span> <span class="n">address</span><span class="o">=</span><span class="n">rsp</span><span class="p">,</span> <span class="n">length</span><span class="o">=</span><span class="mh">0x40</span><span class="p">)</span>
+<span class="o">&gt;&gt;&gt;</span> <span class="n">res</span><span class="o">.</span><span class="n">memory</span>
+<span class="s">'</span><span class="se">\xfd\x05\xf1\x92\xff\x7f\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00</span><span class="s">X</span><span class="se">\xfa\xbf</span><span class="s">_</span><span class="se">\xff\x7f\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x93\xfa\xbf</span><span class="s">_</span><span class="se">\xff\x7f\x00\</span>
+<span class="s">x00</span><span class="se">\xaa\xfa\xbf</span><span class="s">_</span><span class="se">\xff\x7f\x00\x00\xbe\xfa\xbf</span><span class="s">_</span><span class="se">\xff\x7f\x00\x00</span><span class="s">'</span>
+<span class="o">&gt;&gt;&gt;</span> <span class="n">res</span><span class="o">.</span><span class="n">bytes</span>
+<span class="mi">64</span></code></pre>
+
+<p>One more important API method worth noting at this point is the <code>wait</code> method. The server will only return a response once the specified debugger state change has occurred. Currently the only state change supported is ‘stopped’ - signaling that the debugger has stopped for some reason (for example a breakpoint was hit, the user stepped over an instruction, etc). This is the default state change, so we don’t need to specify it.</p>
+
+<pre><code>&gt;&gt;&gt; res = client.perform_request('wait')
+</code></pre>
+
+<p>Now in the debugger:</p>
+
+<pre><code>(lldb) stepi
+Process 16669 stopped
+* thread #1: tid = 0x1a2238, 0x0000000100000cf1 inferior`main + 1, queue = 'com.apple.main-thread', stop reason = instruction step into
+    frame #0: 0x0000000100000cf1 inferior`main + 1
+inferior`main + 1:
+-&gt; 0x100000cf1:  mov    rbp, rsp
+   0x100000cf4:  sub    rsp, 0x50
+   0x100000cf8:  mov    dword ptr [rbp - 0x4], 0x0
+   0x100000cff:  mov    dword ptr [rbp - 0x8], edi
+(lldb)
+</code></pre>
+
+<p>And the <code>perform_request()</code> function should have returned a successful response:</p>
+
+<pre><code>&gt;&gt;&gt; res
+&lt;&lt;class 'wait.APIWaitResponse'&gt;: success = True, error = False, body: {'status': u'success', 'state': u'stopped', 'type': u'response'}&gt;
+</code></pre>
+
+<p>See the <a href="https://github.com/snare/voltron/wiki/JSON-API-reference">API reference</a> for information on the supported core API methods.</p>
+
+<h2 id="building-a-simple-standalone-client">Building a simple standalone client</h2>
+
+<p>Now that we have a basic understanding of how the API works, let’s build a simple client.</p>
+
+<pre><code class="language-python"><span class="c">#!/usr/bin/env python</span>
+
+<span class="kn">import</span> <span class="nn">voltron</span>
+<span class="kn">from</span> <span class="nn">voltron.core</span> <span class="kn">import</span> <span class="n">Client</span>
+
+
+<span class="k">def</span> <span class="nf">main</span><span class="p">():</span>
+    <span class="c"># Create a client and connect to the server</span>
+    <span class="n">client</span> <span class="o">=</span> <span class="n">Client</span><span class="p">()</span>
+    <span class="n">client</span><span class="o">.</span><span class="n">connect</span><span class="p">()</span>
+
+    <span class="c"># Main event loop</span>
+    <span class="k">while</span> <span class="bp">True</span><span class="p">:</span>
+        <span class="c"># Wait for the debugger to stop again</span>
+        <span class="n">res</span> <span class="o">=</span> <span class="n">client</span><span class="o">.</span><span class="n">perform_request</span><span class="p">(</span><span class="s">'wait'</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">res</span><span class="o">.</span><span class="n">is_success</span><span class="p">:</span>
+            <span class="c"># If nothing went wrong, get the instruction pointer and print it</span>
+            <span class="n">res</span> <span class="o">=</span> <span class="n">client</span><span class="o">.</span><span class="n">perform_request</span><span class="p">(</span><span class="s">'registers'</span><span class="p">,</span> <span class="n">registers</span><span class="o">=</span><span class="p">[</span><span class="s">'rip'</span><span class="p">])</span>
+            <span class="k">if</span> <span class="n">res</span><span class="o">.</span><span class="n">is_success</span><span class="p">:</span>
+                <span class="k">print</span><span class="p">(</span><span class="s">"Instruction pointer is: 0x{:X}"</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">res</span><span class="o">.</span><span class="n">registers</span><span class="p">[</span><span class="s">'rip'</span><span class="p">]))</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="k">print</span><span class="p">(</span><span class="s">"Failed to get registers: {}"</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">res</span><span class="p">))</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">print</span><span class="p">(</span><span class="s">"Error waiting for the debugger to stop: {}"</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">res</span><span class="p">))</span>
+            <span class="k">break</span>
+
+
+<span class="k">if</span> <span class="n">__name__</span> <span class="o">==</span> <span class="s">"__main__"</span><span class="p">:</span>
+    <span class="n">main</span><span class="p">()</span></code></pre>
+
+<p>Pretty self-explanatory - we’ve basically just put together all the bits discussed in the previous section. We use the <code>wait</code> method to construct a main event loop that executes some stuff every time the debugger stops. The stuff that we execute just grabs the contents of the <code>RIP</code> register and prints it out. Hooray!</p>
+
+<p>If we run the client and then <code>stepi</code> a few times in the debugger, the output from the client looks something like this:</p>
+
+<pre><code>$ python client.py
+Instruction pointer is: 0x100000CF8
+Instruction pointer is: 0x100000CFF
+Instruction pointer is: 0x100000D02
+Instruction pointer is: 0x100000D06
+Instruction pointer is: 0x100000D0D
+</code></pre>
+
+<h2 id="building-a-simple-view-plugin">Building a simple view plugin</h2>
+
+<p>OK, so we get the gist of how the API works and we’ve used it to build a simple standalone client. Now let’s turn our standalone example into a simple view plugin. Each of the core views included with Voltron that are accessible via the <code>voltron view</code> command is implemented as a view plugin like this.</p>
+
+<p>First, we need to subclass <code>ViewPlugin</code> from the <code>voltron.view</code> module. This is the main entry point for the plugin and contains the name of the plugin and a reference to the main view class for the plugin.</p>
+
+<pre><code class="language-python"><span class="kn">from</span> <span class="nn">voltron.plugin</span> <span class="kn">import</span> <span class="n">ViewPlugin</span>
+
+<span class="k">class</span> <span class="nc">ExampleViewPlugin</span><span class="p">(</span><span class="n">ViewPlugin</span><span class="p">):</span>
+    <span class="n">name</span> <span class="o">=</span> <span class="s">'example'</span>
+    <span class="n">view_class</span> <span class="o">=</span> <span class="n">ExampleView</span></code></pre>
+
+<p>Since this contains a reference to the view class, the view class will need to be defined before the plugin class in the file. So above the plugin class we’ll define the view class, which subclasses <code>TerminalView</code> from the <code>voltron.view</code> module.</p>
+
+<pre><code class="language-python"><span class="kn">from</span> <span class="nn">voltron.view</span> <span class="kn">import</span> <span class="n">TerminalView</span>
+
+<span class="k">class</span> <span class="nc">ExampleView</span><span class="p">(</span><span class="n">TerminalView</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">render</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">clear</span><span class="p">()</span>
+        <span class="n">res</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">client</span><span class="o">.</span><span class="n">perform_request</span><span class="p">(</span><span class="s">'registers'</span><span class="p">,</span> <span class="n">registers</span><span class="o">=</span><span class="p">[</span><span class="s">'rip'</span><span class="p">])</span>
+        <span class="k">if</span> <span class="n">res</span><span class="o">.</span><span class="n">is_success</span><span class="p">:</span>
+            <span class="k">print</span><span class="p">(</span><span class="s">"Instruction pointer is: 0x{:X}"</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">res</span><span class="o">.</span><span class="n">registers</span><span class="p">[</span><span class="s">'rip'</span><span class="p">]))</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">print</span><span class="p">(</span><span class="s">"Failed to get registers: {}"</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">res</span><span class="p">))</span></code></pre>
+
+<p>The important attribute is the <code>render()</code> method. The TerminalView class (well, actually its parent, the <code>VoltronView</code>  class) implements something similar to the main event loop in our example standalone client; each time the debugger stops, the view’s <code>render()</code> method is called.</p>
+
+<p>The parent classes define a few useful attributes. Firstly the <code>clear()</code> method which we call at the beginning of the <code>render()</code> method to clear the screen. Secondly, a <code>Client</code> instance called <code>client</code>.</p>
+
+<p>After that we do pretty much the same thing as in our standalone example, only using the view’s included client object.</p>
+
+<p>The complete example:</p>
+
+<pre><code class="language-python"><span class="kn">from</span> <span class="nn">voltron.view</span> <span class="kn">import</span> <span class="n">TerminalView</span>
+<span class="kn">from</span> <span class="nn">voltron.plugin</span> <span class="kn">import</span> <span class="n">ViewPlugin</span>
+
+
+<span class="k">class</span> <span class="nc">ExampleView</span><span class="p">(</span><span class="n">TerminalView</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">render</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">clear</span><span class="p">()</span>
+        <span class="n">res</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">client</span><span class="o">.</span><span class="n">perform_request</span><span class="p">(</span><span class="s">'registers'</span><span class="p">,</span> <span class="n">registers</span><span class="o">=</span><span class="p">[</span><span class="s">'rip'</span><span class="p">])</span>
+        <span class="k">if</span> <span class="n">res</span><span class="o">.</span><span class="n">is_success</span><span class="p">:</span>
+            <span class="k">print</span><span class="p">(</span><span class="s">"Instruction pointer is: 0x{:X}"</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">res</span><span class="o">.</span><span class="n">registers</span><span class="p">[</span><span class="s">'rip'</span><span class="p">]))</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">print</span><span class="p">(</span><span class="s">"Failed to get registers: {}"</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">res</span><span class="p">))</span>
+
+
+<span class="k">class</span> <span class="nc">ExampleViewPlugin</span><span class="p">(</span><span class="n">ViewPlugin</span><span class="p">):</span>
+    <span class="n">name</span> <span class="o">=</span> <span class="s">'example'</span>
+    <span class="n">view_class</span> <span class="o">=</span> <span class="n">ExampleView</span></code></pre>
+
+<p>If you put this code into a file and symlink it into your Voltron plugins directory, like so:</p>
+
+<pre><code>$ ln -s /path/to/example.py ~/.voltron/plugins/
+</code></pre>
+
+<p>You should now see the plugin listed in the view types at the command line:</p>
+
+<pre><code>usage: voltron view [-h]
+                    {backtrace,register,example,command,memory,disassembly,stack}
+                    ...
+voltron view: error: too few arguments
+</code></pre>
+
+<p>Run the view:</p>
+
+<pre><code>$ voltron view example
+</code></pre>
+
+<p>Each time you <code>stepi</code> in the debugger, the text should update:</p>
+
+<pre><code>Instruction pointer is: 0x100000E75
+</code></pre>
+
+<p>There’s also some more functionality that the parent classes provide. Here’s a more typical view example:</p>
+
+<pre><code class="language-python"><span class="kn">from</span> <span class="nn">voltron.view</span> <span class="kn">import</span> <span class="n">TerminalView</span>
+<span class="kn">from</span> <span class="nn">voltron.plugin</span> <span class="kn">import</span> <span class="n">ViewPlugin</span>
+
+
+<span class="k">class</span> <span class="nc">ExampleView</span><span class="p">(</span><span class="n">TerminalView</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">render</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="c"># Perform the request and set the body to the result</span>
+        <span class="n">res</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">client</span><span class="o">.</span><span class="n">perform_request</span><span class="p">(</span><span class="s">'registers'</span><span class="p">,</span> <span class="n">registers</span><span class="o">=</span><span class="p">[</span><span class="s">'rip'</span><span class="p">])</span>
+        <span class="k">if</span> <span class="n">res</span><span class="o">.</span><span class="n">is_success</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">body</span> <span class="o">=</span> <span class="s">"Instruction pointer is: 0x{:X}"</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">res</span><span class="o">.</span><span class="n">registers</span><span class="p">[</span><span class="s">'rip'</span><span class="p">])</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">body</span> <span class="o">=</span> <span class="s">"Failed to get registers: {}"</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">res</span><span class="p">)</span>
+
+        <span class="c"># Set the title and info</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">title</span> <span class="o">=</span> <span class="s">'[example]'</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">info</span> <span class="o">=</span> <span class="s">'some infoz'</span>
+
+        <span class="c"># Let the parent do the rendering</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">ExampleView</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">render</span><span class="p">()</span>
+
+
+<span class="k">class</span> <span class="nc">ExampleViewPlugin</span><span class="p">(</span><span class="n">ViewPlugin</span><span class="p">):</span>
+    <span class="n">name</span> <span class="o">=</span> <span class="s">'example'</span>
+    <span class="n">view_class</span> <span class="o">=</span> <span class="n">ExampleView</span></code></pre>
+
+<p>In this example, rather than printing the view contents out directly, we set <code>self.body</code> to the output we want in the main body of the view, and set <code>self.title</code> and <code>self.info</code> to what we want in the title and info fields respectively.</p>
+
+<p>We then let the parent classes render it, which should look something like this:</p>
+
+<p><img src="http://i.imgur.com/ALyiiTB.png" alt="example view"></p>
+
+<p>Finally, with some small modifications we can turn this into an x86_64 register view:</p>
+
+<pre><code class="language-python"><span class="kn">from</span> <span class="nn">voltron.view</span> <span class="kn">import</span> <span class="n">TerminalView</span>
+<span class="kn">from</span> <span class="nn">voltron.plugin</span> <span class="kn">import</span> <span class="n">ViewPlugin</span>
+
+
+<span class="k">class</span> <span class="nc">ExampleView</span><span class="p">(</span><span class="n">TerminalView</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">render</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="c"># Perform the request</span>
+        <span class="n">res</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">client</span><span class="o">.</span><span class="n">perform_request</span><span class="p">(</span><span class="s">'registers'</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">res</span><span class="o">.</span><span class="n">is_success</span><span class="p">:</span>
+            <span class="c"># Process the registers and set the body to the formatted list</span>
+            <span class="n">reg_list</span> <span class="o">=</span>  <span class="p">[</span><span class="s">'rax'</span><span class="p">,</span><span class="s">'rbx'</span><span class="p">,</span><span class="s">'rcx'</span><span class="p">,</span><span class="s">'rdx'</span><span class="p">,</span><span class="s">'rbp'</span><span class="p">,</span><span class="s">'rsp'</span><span class="p">,</span><span class="s">'rdi'</span><span class="p">,</span><span class="s">'rsi'</span><span class="p">,</span><span class="s">'rip'</span><span class="p">,</span>
+                         <span class="s">'r8'</span><span class="p">,</span><span class="s">'r9'</span><span class="p">,</span><span class="s">'r10'</span><span class="p">,</span><span class="s">'r11'</span><span class="p">,</span><span class="s">'r12'</span><span class="p">,</span><span class="s">'r13'</span><span class="p">,</span><span class="s">'r14'</span><span class="p">,</span><span class="s">'r15'</span><span class="p">]</span>
+            <span class="n">lines</span> <span class="o">=</span> <span class="nb">map</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="s">'{:3}: {:016X}'</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">res</span><span class="o">.</span><span class="n">registers</span><span class="p">[</span><span class="n">x</span><span class="p">]),</span> <span class="n">reg_list</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">body</span> <span class="o">=</span> <span class="s">'</span><span class="se">\n</span><span class="s">'</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">lines</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">body</span> <span class="o">=</span> <span class="s">"Failed to get registers: {}"</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">res</span><span class="p">)</span>
+
+        <span class="c"># Set the title and info</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">title</span> <span class="o">=</span> <span class="s">'[example]'</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">info</span> <span class="o">=</span> <span class="s">'some infoz'</span>
+
+        <span class="c"># Let the parent do the rendering</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">ExampleView</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">render</span><span class="p">()</span>
+
+
+<span class="k">class</span> <span class="nc">ExampleViewPlugin</span><span class="p">(</span><span class="n">ViewPlugin</span><span class="p">):</span>
+    <span class="n">name</span> <span class="o">=</span> <span class="s">'example'</span>
+    <span class="n">view_class</span> <span class="o">=</span> <span class="n">ExampleView</span></code></pre>
+
+<p>Looking something like this:</p>
+
+<p><img src="http://i.imgur.com/lZkwL0e.png" alt="example view reg"></p>
+
+<p>We can now modify the way the view is displayed, say to show the footer, with the automatically-added command line flags:</p>
+
+<pre><code>$ voltron view example -h
+usage: voltron view example [-h] [--show-header] [--hide-header]
+                            [--show-footer] [--hide-footer] [--name NAME]
+
+optional arguments:
+  -h, --help            show this help message and exit
+  --show-header, -e     show header
+  --hide-header, -E     hide header
+  --show-footer, -f     show footer
+  --hide-footer, -F     hide footer
+  --name NAME, -n NAME  named configuration to use
+$ voltron view example -f
+</code></pre>
+
+<p>Which should look like this:</p>
+
+<p><img src="http://i.imgur.com/CY5oOqO.png" alt="example view footer"></p>
+
+<p>We can also configure the header and footer contents in the config file (<code>~/.voltron/config</code>) like this:</p>
+
+<pre><code>{
+    "view": {
+        "example_view": {
+            "footer": {
+                "show": true,
+                "label_left": {
+                    "name":         "title",
+                    "colour":       "red",
+                    "bg_colour":    "grey",
+                    "attrs":        ["bold"]
+                },
+                "label_right": {
+                    "name":         "info",
+                    "colour":       "white",
+                    "bg_colour":    "grey",
+                    "attrs":        []
+                }
+            },
+            "header": {
+                "show": false
+            }
+        }
+    }
+}
+</code></pre>
+
+<p>This configuration should be fairly self-explanatory. It will hide the header, and the footer will contain the title in red on the left, and the info field in white on the right, like this:</p>
+
+<p><img src="http://i.imgur.com/zmxl9Iv.png" alt="example view config"></p>
+
+<h2 id="until-next-time">Until next time…</h2>
+
+<p>This should give you a good starting point for building Voltron views. See the source for the views included with the Voltron package for more clues.</p>
+
+<p>The next post will describe how to build Voltron API plugins to add server-side functionality that you can access from your views.</p>
+
+              </div>
+            </div>
+            <div class="grid_3">
+              <div id="sidebar">
+                <h2>PAGES</h2>
+                <ul>
+                  <li><a href="/">Home</a></li>
+                  <li><a href="/about">About</a></li>
+                  <li><a href="/downloads">Downloads</a></li>
+                </ul>
+                <h2>TAGS</h2>
+                <p><a class="tagcloud" style="font-size:78.23529411764706%;" href="/tag/voltron/" rel="tag">voltron</a> <a class="tagcloud" style="font-size:85.29411764705883%;" href="/tag/debugging/" rel="tag">debugging</a> <a class="tagcloud" style="font-size:85.29411764705883%;" href="/tag/gdb/" rel="tag">gdb</a> <a class="tagcloud" style="font-size:64.11764705882352%;" href="/tag/lldb/" rel="tag">lldb</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/calculon/" rel="tag">calculon</a> <a class="tagcloud" style="font-size:120.58823529411765%;" href="/tag/efi/" rel="tag">efi</a> <a class="tagcloud" style="font-size:71.17647058823529%;" href="/tag/ida pro/" rel="tag">ida pro</a> <a class="tagcloud" style="font-size:64.11764705882352%;" href="/tag/idapython/" rel="tag">idapython</a> <a class="tagcloud" style="font-size:64.11764705882352%;" href="/tag/reversing/" rel="tag">reversing</a> <a class="tagcloud" style="font-size:85.29411764705883%;" href="/tag/rootkits/" rel="tag">rootkits</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/refind/" rel="tag">refind</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/black hat/" rel="tag">black hat</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/firmware/" rel="tag">firmware</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/bus pirate/" rel="tag">bus pirate</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/flashrom/" rel="tag">flashrom</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/pci/" rel="tag">pci</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/syscan/" rel="tag">syscan</a> <a class="tagcloud" style="font-size:78.23529411764706%;" href="/tag/mac os x/" rel="tag">mac os x</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/x86-64/" rel="tag">x86-64</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/clang/" rel="tag">clang</a> <a class="tagcloud" style="font-size:71.17647058823529%;" href="/tag/kernel/" rel="tag">kernel</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/kexts/" rel="tag">kexts</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/mach-o/" rel="tag">mach-o</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/python/" rel="tag">python</a> <a class="tagcloud" style="font-size:64.11764705882352%;" href="/tag/vmware/" rel="tag">vmware</a> </p>
+                <h2>POSTS</h2>
+                <ul>
+                  
+                    <li><a href="/posts/2015/05/building-voltron-command-plugins/">Building Voltron Command Plugins</a></li>
+                  
+                    <li><a href="/posts/2014/12/building-voltron-views/">Building Voltron Views</a></li>
+                  
+                    <li><a href="/posts/2013/10/calculon-a-calculator-for-nerds/">Calculon - a calculator for nerds</a></li>
+                  
+                    <li><a href="/posts/2013/06/voltron-a-hacky-ui-for-gdb/">Voltron - a hacky UI for GDB</a></li>
+                  
+                    <li><a href="/posts/2012/12/te-loader-for-ida-pro/">TE loader for IDA Pro</a></li>
+                  
+                    <li><a href="/posts/2012/10/ruxcon/">Ruxcon 2012</a></li>
+                  
+                    <li><a href="/posts/2012/09/ida-pro-scripts-for-efi-reversing/">IDA Pro scripts for EFI reversing</a></li>
+                  
+                    <li><a href="/posts/2012/08/building-refind-with-edk2-on-osx/">Building rEFInd with EDKII on Mac OS X</a></li>
+                  
+                    <li><a href="/posts/2012/07/black-hat-usa-2012/">Black Hat USA 2012</a></li>
+                  
+                    <li><a href="/posts/2012/06/unbricking-a-macbook/">Un-bricking a MacBook</a></li>
+                  
+                    <li><a href="/posts/2012/06/send-me-your-lspci/">Send me your `lspci -vv`</a></li>
+                  
+                    <li><a href="/posts/2012/05/syscan-2012-is-over/">SyScan 2012 is Over</a></li>
+                  
+                    <li><a href="/posts/2012/03/rip-relative-addressing-and-kernel-payloads/">RIP-Relative Addressing and Kernel Payloads</a></li>
+                  
+                    <li><a href="/posts/2012/02/resolving-kernel-symbols/">Resolving kernel symbols</a></li>
+                  
+                    <li><a href="/posts/2012/02/carving-up-efi-fat-binaries/">Carving up EFI fat binaries</a></li>
+                  
+                    <li><a href="/posts/2012/02/vmware-hardware-debugging/">VMware debugging II&#58; "Hardware" debugging</a></li>
+                  
+                    <li><a href="/posts/2012/02/debugging-the-mac-os-x-kernel-with-vmware-and-gdb/">Debugging the Mac OS X kernel with VMware and GDB</a></li>
+                  
+                </ul>
+                <h2>SEARCH</h2>
+                <form method="get" action="http://www.google.com/search">
+                  <fieldset>
+                    <input type="hidden" name="sitesearch" value="ho.ax"/>
+                    <input type="text" class="searchbox" name="q" size="31" maxlength="255" value=""/>
+                    <input type="image" class="searchbutton" width=24 height=24 src="/img/search.png" value="Search"/>
+                  </fieldset>
+                </form>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="splitbar">&nbsp;</div>
+      <div id="footer">
+          <div class="container_12">
+            <div class="grid_9">
+              <p>Last updated on 9 May 2015 by snare. Please don't steal my stuff.</p>
+            </div>
+            <div class="grid_3">
+              <div class="media">
+                <div style="float: left"><a class="twitter" href="http://twitter.com/snare"></a></div>
+                <div style="float: left"><a class="rss" href="/feed.xml"></a></div>
+              </div>
+            </div>
+        </div>
+      </div>
+    </div>
+  <script type="text/javascript">
+
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-29183428-1']);
+  _gaq.push(['_trackPageview']);
+
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+
+  </script>
+  <img src="/img/twitter_active.png" style="display: none" />
+  <img src="/img/rss_active.png" style="display: none" />
+  </body>
+</html>

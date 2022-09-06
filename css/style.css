@@ -1,0 +1,266 @@
+@font-face { font-family: "BebasNeue"; src: url('/type/BebasNeue.otf'); }
+@font-face { font-family: "Blackout"; src: url('/type/Blackout.ttf'); }
+
+
+* {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: "Helvetica Neue", sans-serif;
+  color: #222;
+  height:100%;
+  background-color:#303032;
+}
+
+a {
+  text-decoration: none;
+}
+
+a:link,
+a:visited {
+  /*color: #3DC800;*/
+  color: #2EB800
+}
+
+a:hover {
+  color: #0E9800;
+}
+
+hr {
+  background-color: #DDD;
+  border: 0;
+  height: 1px;
+  margin-top: 20px;
+  margin-bottom: 20px;
+}
+
+#container {
+  background: #ddd;
+}
+
+#header {
+  padding-top: 14px;
+  padding-bottom: 8px;
+  background-color:#303032;
+  -moz-box-shadow: 0 3px 5px 3px #888;
+  -webkit-box-shadow: 0 3px 5px 3px #888;
+  box-shadow: 0 3px 5px 3px #888;
+}
+
+#header h1 {
+  font-family: "Blackout";
+  font-size: 60px;
+  font-weight: normal;
+  line-height: 60px;
+  letter-spacing: -1px;
+  padding-left: 30px;
+  color: #C0C0C0;
+}
+
+#header a:link,
+#header a:visited {
+  color: #C0C0C0;
+}
+
+#header a:hover {
+  color: #C0C0C0;
+}
+
+.media {
+  float: right;
+  padding-top: 10px;
+  padding-right: 0px;
+}
+
+a.twitter:link,
+a.twitter:visited {
+  display: block;
+  width: 32px;
+  height: 32px;
+  background: transparent url(/img/twitter_dark.png) no-repeat;
+}
+
+a.twitter:hover {
+  background: transparent url(/img/twitter_active.png) no-repeat;
+}
+
+a.rss:link,
+a.rss:visited { 
+  display: block;
+  width: 32px;
+  height: 32px;
+  background: transparent url(/img/rss_dark.png) no-repeat;
+}
+
+a.rss:hover {
+  background: transparent url(/img/rss_active.png) no-repeat;
+}
+
+#splitbar {
+  background-color:#1DA800;
+  height: 3px;
+}
+
+#tabbar {
+  margin-top: 30px;
+}
+
+#main {
+  padding-top: 30px;
+  padding-bottom: 30px;
+}
+
+#content {
+  background-color:#fff;
+  padding: 30px;
+  -moz-box-shadow: 0 0 2px 1px #888;
+  -webkit-box-shadow: 0 0 2px 1px #888;
+  box-shadow: 0 0 2px 1px #888;
+  color: #222;
+  font-size: 12pt;
+  line-height: 1.4em;
+}
+
+#content .metadata {
+  font-size: 10pt;
+  padding-bottom: 10px;
+}
+
+#content p {
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+
+#content blockquote {
+  margin: 10px;
+  color: #777;
+  border-left: 2px solid #777;
+  padding-left: 1em;
+}
+
+#content blockquote p {
+  margin: 0;
+}
+
+#content h1 {
+  font-size: 24px;
+}
+
+#content h1 a:link,
+#content h1 a:visited {
+  color: #333;
+}
+
+#content h1 a:hover {
+  color: #666;
+}
+
+#content h2 {
+  padding-top: 10px;
+  font-size: 16px;
+  font-weight: bold;
+}
+
+#pagination_data {
+  padding-bottom: 15px;
+}
+
+#content pre {
+  font-size: 10pt;
+  white-space: -moz-pre-wrap; /* Mozilla, supported since 1999 */
+  white-space: -pre-wrap; /* Opera 4 - 6 */
+  white-space: -o-pre-wrap; /* Opera 7 */
+  white-space: pre-wrap; /* CSS3 - Text module (Candidate Recommendation) http://www.w3.org/TR/css3-text/#white-space */
+  word-wrap: break-word; /* IE 5.5+ */
+  padding: 10px;
+  margin: 10px 0px;
+  border: 1px dashed #80c080; 
+  line-height: 1.2em;
+  background-color: #f0f0f0;
+}
+
+#content pre code {
+  font-size: 10pt;
+}
+
+#content code {
+  font-size: 11pt;
+}
+
+#content img {
+  border: 1px dashed #80c080; 
+}
+
+#content .metadata a:link,
+#content .metadata a:visited {
+  color: #c00;
+}
+
+#content .metadata a:hover {
+  color: #e00;
+
+}
+
+#content ul {
+  margin: 0 20px;
+}
+
+#content li {
+  padding: 5px;
+  list-style-type: decimal;
+}
+
+#sidebar {
+  background-color:#303032;
+  padding-left: 20px;
+  padding-right: 20px;
+  padding-bottom: 20px;
+  -moz-box-shadow: 0 0 2px 1px #888;
+  -webkit-box-shadow: 0 0 2px 1px #888;
+  box-shadow: 0 0 2px 1px #888;
+  color: #fff;
+}
+
+#sidebar h2 {
+  font-size: 10pt;
+  padding-top: 20px;
+  padding-bottom: 5px;
+}
+
+input.searchbox {
+  font-size: 12px;
+  float: left;
+  position: relative;
+  height: 24px;
+  width: 180px;
+  border-width: 0px;
+  background-color: #404042;
+  color: #fff;
+}
+
+input.searchbutton {
+  padding-left: 5px;
+  float: left;
+  position: relative;
+}
+
+#sidebar li {
+  font-size: 10pt;
+  padding-bottom: 0.2em;
+}
+
+#footer {
+  padding-top: 10px;
+  padding-bottom: 10px;
+  background-color:#303032;
+  font-size: 10pt;
+  color: #C0C0C0;
+}
+
+#footer p {
+  font-size: 8pt;
+  padding: 20px;
+  padding-left: 30px;
+}

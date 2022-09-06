@@ -1,0 +1,245 @@
+<!DOCTYPE HTML>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>ho.ax - VMware debugging II&#58; "Hardware" debugging</title>
+    <link rel="stylesheet" type="text/css" href="/css/reset.css" media="screen">
+    <link rel="stylesheet" type="text/css" href="/css/grid.css" media="screen">
+    <link rel="stylesheet" type="text/css" href="/css/style.css" media="screen">
+    <link rel="stylesheet" type="text/css" href="/css/highlight.css" media="screen">
+    <link rel="alternate" type="application/rss+xml" title="RSS" href="http://ho.ax/feed.xml">
+  </head>
+  <body>
+      <div id="container">
+        <div id="header">
+          <div class="container_12">
+            <div class="grid_6">
+              <h1><a href="/">ho/ax.</a></h1>
+            </div>
+            <div class="grid_6">
+              <div class="media">
+                <div style="float: left"><a class="twitter" href="http://twitter.com/snare"></a></div>
+                <div style="float: left"><a class="rss" href="/feed.xml"></a></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div id="splitbar">&nbsp;</div>
+        <div id="main">
+          <div class="container_12">
+            <div class="grid_9">
+              <div id="content">
+                <h1><a href="/posts/2012/02/vmware-hardware-debugging/">VMware debugging II&#58; "Hardware" debugging</a></h1>
+<p class="metadata">
+	Posted by snare on 18 February 2012. Tags: <a class="tag" href="/tag/mac os x/" rel="tag">mac os x</a>, <a class="tag" href="/tag/kernel/" rel="tag">kernel</a>, <a class="tag" href="/tag/debugging/" rel="tag">debugging</a>, <a class="tag" href="/tag/vmware/" rel="tag">vmware</a>, <a class="tag" href="/tag/efi/" rel="tag">efi</a>, <a class="tag" href="/tag/gdb/" rel="tag">gdb</a>
+</p>
+
+<p>A few days ago I wrote an <a href="/posts/2012/02/debugging-the-mac-os-x-kernel-with-vmware-and-gdb/">article</a> about debugging the OS X kernel with VMware and GDB, using Apple’s Kernel Debugger Protocol (KDP). There is another method of debugging XNU that is worth mentioning - VMware Fusion’s built in debug server. This is the virtual equivalent of a hardware debugger on a physical machine. According to a VMware engineer:</p>
+
+<blockquote>
+  <p>… when you stop execution, all cores are halted, the guest doesn’t even know that time has stopped, and you can happily single-step interrupt handlers, exceptions, etc.</p>
+</blockquote>
+
+<p>This is pretty awesome, and has a few advantages over KDP:</p>
+
+<ul>
+  <li>It’s easier to break into the debugger - you can use the normal <code>^C</code> method from the GDB session, rather than having to either insert <code>int 3</code>’s into your code or insert breakpoints on predictable function calls like <code>kext_alloc()</code> when you attach the debugger at boot time.</li>
+  <li>It’s faster - KDP works over UDP and seems to have a few timing issues where it drops packets or the target kernel doesn’t respond in time (particularly in the more complex <code>kgmacros</code> commands), whereas the VMware debug stub seems to be substantially faster and (so far) more reliable.</li>
+  <li>You can debug anything from the time the VM is powered on - this means that you can debug non-<code>DEBUG</code> XNU kernels, along with EFI stuff, the bootloader (<code>boot.efi</code>), whatever you want.</li>
+</ul>
+
+<h2 id="vmware-setup">VMware setup</h2>
+
+<p>Getting this going is pretty easy, it just requires a couple of config options to be added to the <code>.vmx</code> file for your virtual machine. For example, if you have a VM called <em>Lion.vmwarevm</em> there’ll be a file inside called <em>Lion.vmx</em> which contains the configuration for the VM. Add the following lines (while the VM is not running):</p>
+
+<pre><code>debugStub.listen.guest32 = "TRUE"
+debugStub.listen.guest64 = "TRUE"
+</code></pre>
+
+<p>The debug stub listens on the loopback interface on the Mac OS X host OS on which Fusion is running. If you want to debug from another machine (or VM) you need to enable the ‘remote’ listener in the <code>.vmx</code> file instead of (or as well as) the local listener:</p>
+
+<pre><code>debugStub.listen.guest32.remote = "TRUE"
+debugStub.listen.guest64.remote = "TRUE"
+</code></pre>
+
+<p>Using this method you can connect to the debug stub from an instance of the FSF version of GDB on a Linux box.</p>
+
+<p>That’s it, start up the VM. If you’re using a VM with a <code>DEBUG</code> kernel and you’ve set the <code>boot-args</code> variable in NVRAM to contain <code>debug=0x1</code>, as per the <a href="/posts/2012/02/debugging-the-mac-os-x-kernel-with-vmware-and-gdb/">previous article</a>, you will need to attach another instance of GDB via KDP at this point and <code>continue</code> in that instance to let the boot process finish.</p>
+
+<h2 id="gdb">GDB</h2>
+
+<p>I’ve found that if you try to connect to the debug stub without loading a file to debug you get errors like this:</p>
+
+<pre><code class="language-gdb">[New thread <span class="mh">1</span>]
+Remote register badly formatted: T<span class="mh">05</span>thread:<span class="mh">00000001</span>;<span class="mh">06</span>:<span class="mh">10</span>d<span class="mh">3</span>fc<span class="mh">7</span>f<span class="mh">00000000</span>;<span class="mh">07</span>:c<span class="mh">0</span>d<span class="mh">2</span>fc<span class="mh">7</span>f<span class="mh">00000000</span>;<span class="mh">10</span>:<span class="mh">8</span>a<span class="mh">18</span>a<span class="mh">07</span>d<span class="mh">00000000</span>;
+here: <span class="mh">0000000</span>;<span class="mh">07</span>:c<span class="mh">0</span>d<span class="mh">2</span>fc<span class="mh">7</span>f<span class="mh">00000000</span>;<span class="mh">10</span>:<span class="mh">8</span>a<span class="mh">18</span>a<span class="mh">07</span>d<span class="mh">00000000</span>;</code></pre>
+
+<p>So start up GDB with whatever you’re intending to debug. In this example, the <code>DEBUG</code> kernel that is installed on the VM:</p>
+
+<pre><code class="language-gdb">$ gdb /Volumes/KernelDebugKit/DEBUG_Kernel/mach_kernel</code></pre>
+
+<p>If you’re debugging a 32-bit VM on a 64-bit machine, you’ll need to set the architecture:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">set</span> architecture i<span class="mh">386</span></code></pre>
+
+<p>Or, if you are debugging 64-bit on 64-bit and have trouble connecting to the debug stub, you may need to explicitly set it to 64-bit:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">set</span> architecture i<span class="mh">386</span>:x<span class="mh">86</span>-<span class="mh">64</span></code></pre>
+
+<p>If you’re debugging a 64-bit VM, connect to the 64-bit debug stub:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">target</span> remote localhost:<span class="mh">8864</span></code></pre>
+
+<p>Or the 32-bit debug stub for a 32-bit VM:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">target</span> remote localhost:<span class="mh">8832</span></code></pre>
+
+<p>At this point you should be connected to the debug stub, and the VM should be paused. You’ll see a dark translucent version of the ‘play’ button used to start the VM on the VM console (indicating the VM is paused and the debugger has control), and something like this in GDB:</p>
+
+<pre><code class="language-gdb">[New thread <span class="mh">1</span>]
+warning: Error <span class="mh">268435459</span> getting port names from mach_port_names
+[Switching to process <span class="mh">1</span> thread <span class="mh">0x0</span>]
+<span class="mh">0xffffff80008bf4c2</span> in tweak_crypt_group ()
+gdb$</code></pre>
+
+<p><code>tweak_crypt_group()</code> - heh. My VM is encrypting its disk at the moment.</p>
+
+<p>Now you’re in familiar territory:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">source</span> /Volumes/KernelDebugKit/kgmacros 
+Loading Kernel GDB Macros package.  Type <span class="s">"help kgm"</span> for more info.
+<span class="kt">gdb$</span> <span class="nb">bt</span>
+#<span class="mh">0</span>  <span class="mh">0xffffff7f817315b4</span> in ?? ()
+#<span class="mh">1</span>  <span class="mh">0xffffff7f8172343e</span> in ?? ()
+#<span class="mh">2</span>  <span class="mh">0xffffff7f81724f68</span> in ?? ()
+#<span class="mh">3</span>  <span class="mh">0xffffff8000379b18</span> in machine_idle () at pmCPU.c:<span class="mh">107</span>
+#<span class="mh">4</span>  <span class="mh">0xffffff800025c357</span> in processor_idle (thread<span class="o">=</span><span class="mh">0xffffff8008712b80</span>, processor<span class="o">=</span><span class="mh">0xffffff8000c9be20</span>) at sched_prim.c:<span class="mh">3928</span>
+#<span class="mh">5</span>  <span class="mh">0xffffff8000257060</span> in thread_select_idle (thread<span class="o">=</span><span class="mh">0xffffff8008712b80</span>, processor<span class="o">=</span><span class="mh">0xffffff8000c9be20</span>) at sched_prim.c:<span class="mh">1793</span>
+#<span class="mh">6</span>  <span class="mh">0xffffff8000256d8e</span> in thread_select (thread<span class="o">=</span><span class="mh">0xffffff8008712b80</span>, processor<span class="o">=</span><span class="mh">0xffffff8000c9be20</span>) at sched_prim.c:<span class="mh">1728</span>
+#<span class="mh">7</span>  <span class="mh">0xffffff8000258bbf</span> in thread_block_reason (continuation<span class="o">=</span><span class="mh">0xffffff8000227270</span> <span class="nf">&lt;ipc_mqueue_receive_continue&gt;</span>, parameter<span class="o">=</span><span class="mh">0x0</span>, reason<span class="o">=</span><span class="mh">0x0</span>) at sched_prim.c:<span class="mh">2396</span>
+#<span class="mh">8</span>  <span class="mh">0xffffff8000258cbc</span> in thread_block (continuation<span class="o">=</span><span class="mh">0xffffff8000227270</span> <span class="nf">&lt;ipc_mqueue_receive_continue&gt;</span>) at sched_prim.c:<span class="mh">2415</span>
+#<span class="mh">9</span>  <span class="mh">0xffffff8000227357</span> in ipc_mqueue_receive (mqueue<span class="o">=</span><span class="mh">0xffffff8008854728</span>, option<span class="o">=</span><span class="mh">0x7000006</span>, max_size<span class="o">=</span><span class="mh">0xc00</span>, rcv_timeout<span class="o">=</span><span class="mh">0xffffffff</span>, interruptible<span class="o">=</span><span class="mh">0x2</span>) at ipc_mqueue.c:<span class="mh">698</span>
+#<span class="mh">10</span> <span class="mh">0xffffff8000237542</span> in mach_msg_overwrite_trap (args<span class="o">=</span><span class="mh">0xffffff800872b804</span>) at mach_msg.c:<span class="mh">528</span>
+#<span class="mh">11</span> <span class="mh">0xffffff80002375b4</span> in mach_msg_trap (args<span class="o">=</span><span class="mh">0xffffff800872b804</span>) at mach_msg.c:<span class="mh">554</span>
+#<span class="mh">12</span> <span class="mh">0xffffff8000354a01</span> in mach_call_munger<span class="mh">64</span> (state<span class="o">=</span><span class="mh">0xffffff800872b800</span>) at bsd_i<span class="mh">386</span>.c:<span class="mh">534</span>
+<span class="kt">gdb$</span> <span class="nb">showalltasks</span>
+task                vm_map              ipc_space          #acts   pid  process             io_policy    wq_state   command
+<span class="mh">0xffffff80067ac938</span>  <span class="mh">0xffffff800249ee98</span>  <span class="mh">0xffffff80066ebdb0</span>    <span class="mh">60</span>     <span class="mh">0</span>  <span class="mh">0xffffff8000cb4c20</span>                          kernel_task
+<span class="mh">0xffffff80067ac5a0</span>  <span class="mh">0xffffff800249e200</span>  <span class="mh">0xffffff80066ebd10</span>     <span class="mh">3</span>     <span class="mh">1</span>  <span class="mh">0xffffff8007576820</span>                          launchd
+<span class="mh">0xffffff80067ac208</span>  <span class="mh">0xffffff800249e010</span>  <span class="mh">0xffffff80066ebc70</span>     <span class="mh">1</span>     <span class="mh">2</span>  <span class="mh">0xffffff80075763d0</span>                          launchctl
+<span class="mh">0xffffff80067ab740</span>  <span class="mh">0xffffff800249e108</span>  <span class="mh">0xffffff80066eba90</span>     <span class="mh">3</span>    <span class="mh">10</span>  <span class="mh">0xffffff80075756e0</span>                <span class="mh">2</span>  <span class="mh">1</span>  <span class="mh">0</span>   kextd
+<span class="mh">0xffffff80067abe70</span>  <span class="mh">0xffffff8007003568</span>  <span class="mh">0xffffff80066ebbd0</span>     <span class="mh">3</span>    <span class="mh">11</span>  <span class="mh">0xffffff8007575f80</span>                <span class="mh">1</span>  <span class="mh">0</span>  <span class="mh">0</span>   UserEventAgent
+<span class="mh">0xffffff80067abad8</span>  <span class="mh">0xffffff8007e692f8</span>  <span class="mh">0xffffff80066ebb30</span>     <span class="mh">3</span>    <span class="mh">12</span>  <span class="mh">0xffffff8007575b30</span>                <span class="mh">1</span>  <span class="mh">0</span>  <span class="mh">0</span>   mDNSResponder
+<span class="cs">&lt;snip&gt;</span></code></pre>
+
+<p>Don’t forget you can just <code>^C</code> to drop back into the debuggger just like back in the good old userland days:</p>
+
+<pre><code class="language-gdb"><span class="kt">gdb$</span> <span class="nb">c</span>
+^C
+Program received signal SIGINT, Interrupt.
+<span class="mh">0xffffff7f817315b4</span> in ?? ()
+<span class="kt">gdb$</span> <span class="nb">bt</span>
+#<span class="mh">0</span>  <span class="mh">0xffffff7f817315b4</span> in ?? ()
+#<span class="mh">1</span>  <span class="mh">0xffffff7f8172343e</span> in ?? ()
+#<span class="mh">2</span>  <span class="mh">0xffffff7f81724f68</span> in ?? ()
+#<span class="mh">3</span>  <span class="mh">0xffffff8000379b18</span> in machine_idle () at pmCPU.c:<span class="mh">107</span>
+#<span class="mh">4</span>  <span class="mh">0xffffff800025c357</span> in processor_idle (thread<span class="o">=</span><span class="mh">0xffffff8008712b80</span>, processor<span class="o">=</span><span class="mh">0xffffff8000c9be20</span>) at sched_prim.c:<span class="mh">3928</span>
+<span class="cs">&lt;snip&gt;</span></code></pre>
+
+<p>Enjoy.</p>
+
+              </div>
+            </div>
+            <div class="grid_3">
+              <div id="sidebar">
+                <h2>PAGES</h2>
+                <ul>
+                  <li><a href="/">Home</a></li>
+                  <li><a href="/about">About</a></li>
+                  <li><a href="/downloads">Downloads</a></li>
+                </ul>
+                <h2>TAGS</h2>
+                <p><a class="tagcloud" style="font-size:78.23529411764706%;" href="/tag/voltron/" rel="tag">voltron</a> <a class="tagcloud" style="font-size:85.29411764705883%;" href="/tag/debugging/" rel="tag">debugging</a> <a class="tagcloud" style="font-size:85.29411764705883%;" href="/tag/gdb/" rel="tag">gdb</a> <a class="tagcloud" style="font-size:64.11764705882352%;" href="/tag/lldb/" rel="tag">lldb</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/calculon/" rel="tag">calculon</a> <a class="tagcloud" style="font-size:120.58823529411765%;" href="/tag/efi/" rel="tag">efi</a> <a class="tagcloud" style="font-size:71.17647058823529%;" href="/tag/ida pro/" rel="tag">ida pro</a> <a class="tagcloud" style="font-size:64.11764705882352%;" href="/tag/idapython/" rel="tag">idapython</a> <a class="tagcloud" style="font-size:64.11764705882352%;" href="/tag/reversing/" rel="tag">reversing</a> <a class="tagcloud" style="font-size:85.29411764705883%;" href="/tag/rootkits/" rel="tag">rootkits</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/refind/" rel="tag">refind</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/black hat/" rel="tag">black hat</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/firmware/" rel="tag">firmware</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/bus pirate/" rel="tag">bus pirate</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/flashrom/" rel="tag">flashrom</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/pci/" rel="tag">pci</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/syscan/" rel="tag">syscan</a> <a class="tagcloud" style="font-size:78.23529411764706%;" href="/tag/mac os x/" rel="tag">mac os x</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/x86-64/" rel="tag">x86-64</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/clang/" rel="tag">clang</a> <a class="tagcloud" style="font-size:71.17647058823529%;" href="/tag/kernel/" rel="tag">kernel</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/kexts/" rel="tag">kexts</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/mach-o/" rel="tag">mach-o</a> <a class="tagcloud" style="font-size:57.05882352941176%;" href="/tag/python/" rel="tag">python</a> <a class="tagcloud" style="font-size:64.11764705882352%;" href="/tag/vmware/" rel="tag">vmware</a> </p>
+                <h2>POSTS</h2>
+                <ul>
+                  
+                    <li><a href="/posts/2015/05/building-voltron-command-plugins/">Building Voltron Command Plugins</a></li>
+                  
+                    <li><a href="/posts/2014/12/building-voltron-views/">Building Voltron Views</a></li>
+                  
+                    <li><a href="/posts/2013/10/calculon-a-calculator-for-nerds/">Calculon - a calculator for nerds</a></li>
+                  
+                    <li><a href="/posts/2013/06/voltron-a-hacky-ui-for-gdb/">Voltron - a hacky UI for GDB</a></li>
+                  
+                    <li><a href="/posts/2012/12/te-loader-for-ida-pro/">TE loader for IDA Pro</a></li>
+                  
+                    <li><a href="/posts/2012/10/ruxcon/">Ruxcon 2012</a></li>
+                  
+                    <li><a href="/posts/2012/09/ida-pro-scripts-for-efi-reversing/">IDA Pro scripts for EFI reversing</a></li>
+                  
+                    <li><a href="/posts/2012/08/building-refind-with-edk2-on-osx/">Building rEFInd with EDKII on Mac OS X</a></li>
+                  
+                    <li><a href="/posts/2012/07/black-hat-usa-2012/">Black Hat USA 2012</a></li>
+                  
+                    <li><a href="/posts/2012/06/unbricking-a-macbook/">Un-bricking a MacBook</a></li>
+                  
+                    <li><a href="/posts/2012/06/send-me-your-lspci/">Send me your `lspci -vv`</a></li>
+                  
+                    <li><a href="/posts/2012/05/syscan-2012-is-over/">SyScan 2012 is Over</a></li>
+                  
+                    <li><a href="/posts/2012/03/rip-relative-addressing-and-kernel-payloads/">RIP-Relative Addressing and Kernel Payloads</a></li>
+                  
+                    <li><a href="/posts/2012/02/resolving-kernel-symbols/">Resolving kernel symbols</a></li>
+                  
+                    <li><a href="/posts/2012/02/carving-up-efi-fat-binaries/">Carving up EFI fat binaries</a></li>
+                  
+                    <li><a href="/posts/2012/02/vmware-hardware-debugging/">VMware debugging II&#58; "Hardware" debugging</a></li>
+                  
+                    <li><a href="/posts/2012/02/debugging-the-mac-os-x-kernel-with-vmware-and-gdb/">Debugging the Mac OS X kernel with VMware and GDB</a></li>
+                  
+                </ul>
+                <h2>SEARCH</h2>
+                <form method="get" action="http://www.google.com/search">
+                  <fieldset>
+                    <input type="hidden" name="sitesearch" value="ho.ax"/>
+                    <input type="text" class="searchbox" name="q" size="31" maxlength="255" value=""/>
+                    <input type="image" class="searchbutton" width=24 height=24 src="/img/search.png" value="Search"/>
+                  </fieldset>
+                </form>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="splitbar">&nbsp;</div>
+      <div id="footer">
+          <div class="container_12">
+            <div class="grid_9">
+              <p>Last updated on 9 May 2015 by snare. Please don't steal my stuff.</p>
+            </div>
+            <div class="grid_3">
+              <div class="media">
+                <div style="float: left"><a class="twitter" href="http://twitter.com/snare"></a></div>
+                <div style="float: left"><a class="rss" href="/feed.xml"></a></div>
+              </div>
+            </div>
+        </div>
+      </div>
+    </div>
+  <script type="text/javascript">
+
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-29183428-1']);
+  _gaq.push(['_trackPageview']);
+
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+
+  </script>
+  <img src="/img/twitter_active.png" style="display: none" />
+  <img src="/img/rss_active.png" style="display: none" />
+  </body>
+</html>
